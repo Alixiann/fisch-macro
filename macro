@@ -6,7 +6,7 @@
 
   local CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
   local INSTANT_HOLD = 0.15 -- Short cast tap; clears Fisch's initial input delay.
-  local castMode = "Perfect"
+  local castMode = "Instant"
   local RETRY = 2
   local FAILSAFE = 20
   local ENTER_INTERVAL = 0.10
@@ -19,7 +19,6 @@
   local RS = game:GetService("ReplicatedStorage")
   local Lighting = game:GetService("Lighting")
   local W = game:GetService("Workspace")
-  local GuiService = game:GetService("GuiService")
   local VirtualInputManager = game:GetService("VirtualInputManager")
 
   local player = Players.LocalPlayer
@@ -41,8 +40,6 @@
   local navigationWanted = false
 
   local pendingKey, keyReleaseAt
-  local nextEnter = 0
-  local nextShakeInput = 0
   local nextCast, releaseAt = 0, nil
   local castMeter, castFill, castGreen
   local idleSince
@@ -142,8 +139,8 @@
   divider.Filled = true
 
   label("P Toggle    ] Hide", 14, 268, 11)
-  local castModeText = label("Perfect cast", 145, 268, 11)
-  castModeText.Color = C.green
+  local castModeText = label("Instant cast", 145, 268, 11)
+  castModeText.Color = C.blue
   local instantText = label("L Instant catch OFF", 14, 292, 11)
   instantText.Color = C.instantOff
   label("(u have to catch a", 151, 291, 9)
@@ -245,6 +242,83 @@
   local cursor = player:GetMouse()
   local panelInputCaptured = false
   local leftWasDown = false
+
+  local function activeShakeButton()
+      local currentGui = player:FindFirstChildOfClass("PlayerGui")
+      local shakeGui = currentGui and currentGui:FindFirstChild("shakeui")
+      if not shakeGui then return nil end
+      local function visibleInTree(object)
+          local node = object
+          while node and node ~= shakeGui do
+              local ok, visible = pcall(function() return node.Visible end)
+              if ok and visible == false then return false end
+              node = node.Parent
+          end
+          return true
+      end
+      local function hasShakeText(object)
+          local ok, value = pcall(function() return object.Text end)
+          return ok and type(value) == "string"
+              and value:lower():find("shake", 1, true) ~= nil
+      end
+      -- Find the actual circular control by its visible "Shake" text.
+      for _, object in ipairs(shakeGui:GetDescendants()) do
+          if (object:IsA("GuiButton") or object:IsA("TextLabel"))
+              and visibleInTree(object) and hasShakeText(object) then
+              local node = object
+              while node and node ~= shakeGui do
+                  if node:IsA("GuiButton") then return node end
+                  node = node.Parent
+              end
+              if object:IsA("GuiButton") then return object end
+          end
+      end
+      return nil
+  end
+
+  local function moveMouseFast(x, y)
+      if type(mousemoveabs) == "function" then
+          return pcall(mousemoveabs, x, y)
+      elseif type(setcursorpos) == "function" then
+          return pcall(setcursorpos, x, y)
+      elseif type(mousemoverel) == "function" then
+          local cx, cy = cursor.X, cursor.Y
+          if type(cx) == "number" and type(cy) == "number" then
+              return pcall(mousemoverel, x - cx, y - cy)
+          end
+      end
+      return false
+  end
+
+  -- Independent watcher, matching the reference script's ChildAdded-style
+  -- behavior. This keeps shaking alive even while the cast loop is changing
+  -- states between bite, shake, and reel.
+  task.spawn(function()
+      while alive do
+          if enabled and not panelInputCaptured then
+              local button = activeShakeButton()
+              if button then
+                  pcall(function()
+                      local p, size = button.AbsolutePosition, button.AbsoluteSize
+                      local x, y = p.X + size.X / 2, p.Y + size.Y / 2
+                      moveMouseFast(x, y)
+                      pcall(mouse1press)
+                      task.wait(0.02)
+                      pcall(mouse1release)
+                      VirtualInputManager:SendMouseButtonEvent(
+                          x, y, 0, true, player, 0)
+                      VirtualInputManager:SendMouseButtonEvent(
+                          x, y, 0, false, player, 0)
+                  end)
+                  task.wait(0.1)
+              else
+                  task.wait(0.03)
+              end
+          else
+              task.wait(0.05)
+          end
+      end
+  end)
 
   local function releasePanelInput()
       if panelInputCaptured then
@@ -1423,7 +1497,7 @@
 
                       releaseAt, idleSince = nil, nil
                       recoveryStage = 0
-                      nextCast, nextEnter = now, now
+                      nextCast = now
                       wasReeling = false
                       resetTracking()
 
@@ -1461,12 +1535,9 @@
                   local fish = bar and bar:FindFirstChild("fish")
                   local playerbar = bar and bar:FindFirstChild("playerbar")
 
-                  local shake = gui and gui:FindFirstChild("shakeui")
-                  local safe = shake and shake:FindFirstChild("safezone")
-                  local button = safe and safe:FindFirstChild("button")
-                  -- shakeui can remain mounted while inactive; only treat a
-                  -- visible button as the in-between shake step.
-                  local shakeActive = button and button.Visible == true
+                  local button = activeShakeButton()
+                  local reelActive = reel and bar and fish and playerbar
+                  local shakeActive = button ~= nil and not reelActive
 
                   -- Recheck after navigation settles in case the rod was
                   -- equipped manually while the initial equip was pending.
@@ -1500,7 +1571,7 @@
                       mouse(false)
                       display("EQUIPPING ROD")
 
-                  elseif reel then
+                  elseif reelActive then
                       releaseKey()
                       setNavigation(false)
                       idleSince = nil
@@ -1537,19 +1608,6 @@
                           releaseKey()
                           setNavigation(false)
                       end
-                      -- Match the linked auto-shake implementation: focus the
-                      -- button through Roblox UI navigation, then send Return.
-                      if now >= nextShakeInput then
-                          pcall(function()
-                              GuiService.SelectedObject = button
-                              if GuiService.SelectedObject == button then
-                                  VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
-                                  VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
-                              end
-                          end)
-                          nextShakeInput = now + 0.10
-                      end
-
                       display("SHAKING")
 
                   else
