@@ -20,6 +20,7 @@
   local Lighting = game:GetService("Lighting")
   local W = game:GetService("Workspace")
   local VirtualInputManager = game:GetService("VirtualInputManager")
+  local UserInputService = game:GetService("UserInputService")
 
   local player = Players.LocalPlayer
   if not player then
@@ -41,6 +42,7 @@
   local instantCache, instantOriginal
   local instantGeneration, nextInstant = 0, 0
   local toggleInstant
+  local toggleMacro
   local held, wasReeling = false, false
   local equipPending = false
   local equipReadyAt = 0
@@ -93,8 +95,12 @@
   local MIN_UI_SCALE = 0.80
   local MAX_UI_SCALE = 1.30
   local UI_SCALE_STEP = 0.10
+  -- Matcha exposes Right Control as VK 0xA3 and Right Alt as VK 0xA5.
+  local MACRO_KEY = 0xA3
+  local INSTANT_KEY = 0xA5
   local npcMenuOpen = false
   local npcMenuAnim = 0
+  local npcSubOpen = false
   local dropdownAnimLast = tick()
   local npcMenuDrawings = {}
   local totemMenu = {
@@ -116,6 +122,10 @@
       slots = {}
   }
   local customGpsGui, customGpsBox, customGpsButton
+  local customGpsFallbackBox, customGpsFallbackText, customGpsFallbackButton
+  local customGpsText = ""
+  local customGpsEditing = false
+  local customGpsKeys = {}
 
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
@@ -213,8 +223,9 @@
   divider.Color = C.line
   divider.Filled = true
 
-  label("P Toggle    ] Hide", 14, 268, 11)
-  local instantText = label("L Instant catch OFF", 14, 292, 11)
+  local macroText = label("RCTRL Macro OFF", 14, 268, 11)
+  macroText.Color = C.instantOff
+  local instantText = label("RALT Instant catch OFF", 14, 292, 11)
   instantText.Color = C.instantOff
   local castModeText = label("Instant cast", 14, 316, 11)
   castModeText.Color = C.blue
@@ -235,12 +246,12 @@
       return d
   end
   npcLabel("CUSTOM GPS", 14, 397, 11, C.cyan)
-  npcLabel("Type X, Y, Z below, then press Teleport", 26, 421, 10, C.muted)
-  npcLabel("NPC TELEPORTS", 14, 452, 11, C.cyan)
-  npcLabel("BUFFERS", 14, 480, 11, C.cyan)
+  local npcSubArrow = npcLabel("v", 251, 450, 16, C.cyan)
+  npcLabel("NPCs", 14, 452, 11, C.green)
+  npcLabel("BUFFERS", 14, 480, 11, C.yellow)
   npcLabel("Merlin", 26, 504, 12)
   npcLabel("Astronomer Vega", 26, 532, 12)
-  npcLabel("SHOPS", 14, 564, 11, C.cyan)
+  npcLabel("SHOPS", 14, 564, 11, C.pink)
   npcLabel("Daily Shopkeeper", 26, 588, 12)
   npcLabel("Rare Goods Dealer", 26, 616, 12)
   npcLabel("Elder Kaito", 26, 644, 12)
@@ -254,10 +265,10 @@
   end
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
-      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526},
+      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526, preferHead = true},
       {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 582, pos = {229, 139, 42}},
       {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 610, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
-      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, useCurrentPosition = true},
+      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, pos = {3000, 1635, 901}, exactPosition = true, skipNpc = true},
   }
   -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
   totemMenu.rows = {
@@ -271,10 +282,10 @@
       {name = "Blizzard", pos = {20147, 743, 5805}},
       {name = "Blue Moon", pos = {2715, 140, 2480}},
       {name = "Zeus Storm", pos = {-4326, -627, 2687}},
-      {name = "Dripstone Collapse", pos = {-3158, -1105, 788}},
+      {name = "Dripstone Collapse", pos = {3158, -1105, 788}},
   }
   totemMenu.title = label("Totems", 14, 396, 12)
-  totemMenu.title.Color = C.cyan
+  totemMenu.title.Color = C.yellow
   totemMenu.arrow = label("v", 251, 394, 16)
   local function totemLabel(text, x, offset, size, color)
       local d = label(text, x, totemMenu.top + offset, size)
@@ -315,7 +326,7 @@
       {name = "Castaway Cliffs", pos = {690, 135, -1693}},
   }
   islandMenu.title = label("Islands", 14, 428, 12)
-  islandMenu.title.Color = C.cyan
+  islandMenu.title.Color = C.pink
   islandMenu.arrow = label("v", 251, 426, 16)
   local function islandLabel(text, x, offset, size, color)
       local d = label(text, x, islandMenu.top + offset, size)
@@ -346,8 +357,14 @@
               local model = object
               if model.ClassName ~= "Model" then model = object.Parent end
               if model and model.ClassName == "Model" then
-                  local part = model:FindFirstChild("HumanoidRootPart")
-                      or model:FindFirstChild("Head") or model.PrimaryPart
+                  local part
+                  if row.preferHead then
+                      part = model:FindFirstChild("Head")
+                          or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+                  else
+                      part = model:FindFirstChild("HumanoidRootPart")
+                          or model:FindFirstChild("Head") or model.PrimaryPart
+                  end
                   if part then return part.Position end
               end
           end
@@ -356,7 +373,7 @@
 
   local function updateInstantLabel()
       instantText.Text = instantLoading and "L Loading..."
-          or instantEnabled and "L Instant catch ON" or "L Instant catch OFF"
+          or instantEnabled and "RALT Instant catch ON" or "RALT Instant catch OFF"
       instantText.Color = instantEnabled and C.instantOn or C.instantOff
   end
 
@@ -471,14 +488,11 @@
 
       lastPanelX, lastPanelY = x, y
 
-      if customGpsBox and customGpsButton then
-          customGpsBox.Position = UDim2.fromOffset(x + 14 * uiScale, y + 397 * uiScale)
-          customGpsBox.Size = UDim2.fromOffset((PANEL_W - 28) * uiScale, 24 * uiScale)
-          customGpsButton.Position = UDim2.fromOffset(x + 14 * uiScale, y + 425 * uiScale)
-          customGpsButton.Size = UDim2.fromOffset((PANEL_W - 28) * uiScale, 24 * uiScale)
+      if customGpsFallbackBox then
           local visible = shown and npcMenuOpen
-          customGpsBox.Visible = visible
-          customGpsButton.Visible = visible
+          customGpsFallbackBox.Visible = visible
+          customGpsFallbackText.Visible = visible
+          customGpsFallbackButton.Visible = visible
       end
 
       for _, entry in ipairs(layout) do
@@ -509,6 +523,12 @@
       if not focused or not shown or type(x) ~= "number" or type(y) ~= "number" then
           dragging = false
       elseif down then
+          if lastPanelX and lastPanelY
+              and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+              and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
+              -- Keep Roblox from treating GUI dragging as camera orbit.
+              pcall(setrobloxinput, false)
+          end
           if not rightWasDown and lastPanelX and lastPanelY
               and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
               and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
@@ -557,6 +577,9 @@
 
           if npcMenuDrawings[entry.d] then
               menuAlpha = npcMenuAnim
+              if npcMenuDrawings[entry.d] >= 480 then
+                  menuAlpha = menuAlpha * (npcSubOpen and 1 or 0)
+              end
           elseif totemMenu.drawings[entry.d] then
               menuAlpha = totemMenu.anim
           elseif islandMenu.drawings[entry.d] then
@@ -705,7 +728,10 @@
       local root = character and character:FindFirstChild("HumanoidRootPart")
       if not root then npcStatus.Text = "Waiting for your character"; return end
       local pos, live
-      if row.useStartPosition then
+      if row.skipNpc then
+          pos = row.pos and Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+          live = false
+      elseif row.useStartPosition then
           -- If the character was still loading when the script started,
           -- capture the current position on the first click as a fallback.
           pos = rareGoodsDealerStartPosition or root.Position
@@ -739,6 +765,19 @@
           warn("NPC teleport: " .. tostring(err))
           return
       end
+      task.spawn(function()
+          for _ = 1, 6 do
+              if not alive or not root or not root.Parent then return end
+              pcall(function()
+                  root.CFrame = CFrame.new(
+                      pos.X,
+                      pos.Y + (row.exactPosition and 0 or 2),
+                      pos.Z + (row.exactPosition and 0 or 4)
+                  )
+              end)
+              task.wait(0.05)
+          end
+      end)
       npcStatus.Text = row.name .. (live and ": moved" or ": map location")
   end
 
@@ -751,9 +790,10 @@
       -- Tiny slide animation:
       -- NPC expansion pushes the Totems header down smoothly. Totems then
       -- push the Islands header down, and Islands grow the panel bottom.
-      totemMenu.top = 388 + 312 * npcMenuAnim
-      islandMenu.top = totemMenu.top + 32 + 221 * totemMenu.anim
+      totemMenu.top = 388 + (npcSubOpen and 312 or 95) * npcMenuAnim
+      islandMenu.top = totemMenu.top + 48 + 221 * (totemMenu.open and 1 or 0)
       npcArrow.Text = npcMenuOpen and "^" or "v"
+      npcSubArrow.Text = npcSubOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
       islandMenu.arrow.Text = islandMenu.open and "^" or "v"
 
@@ -791,6 +831,9 @@
               entry.y = islandMenu.top + 8
           elseif entry.d == islandMenu.arrow then
               entry.y = islandMenu.top + 6
+          elseif islandMenu.drawings[entry.d] then
+              entry.y = islandMenu.top + islandMenu.drawings[entry.d]
+                  - (1 - islandMenu.anim) * 6
           elseif npcMenuDrawings[entry.d] then
               -- Content rises the last few pixels while fading in.
               entry.y = npcMenuDrawings[entry.d] - (1 - npcMenuAnim) * 6
@@ -810,6 +853,12 @@
       for i, d in ipairs(islandMenu.slots) do
           local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + i]
           d.Text = row and row.name or ""
+          for _, entry in ipairs(layout) do
+              if entry.d == d then
+                  entry.y = islandMenu.top + 38 + (i - 1) * 27
+                  break
+              end
+          end
       end
       islandMenu.pageLabel.Text = islandMenu.page .. " / "
           .. math.ceil(#islandMenu.rows / islandMenu.pageSize)
@@ -930,7 +979,66 @@
           root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
       end)
       islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
+      if ok then
+          task.spawn(function()
+              for _ = 1, 6 do
+                  if not alive or not root or not root.Parent then return end
+                  pcall(function()
+                      root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
+                  end)
+                  task.wait(0.05)
+              end
+          end)
+      end
       if not ok then warn("Island teleport: " .. tostring(err)) end
+  end
+
+  local function updateCustomGpsDisplay()
+      if not customGpsFallbackText then return end
+      customGpsFallbackText.Text = customGpsText ~= "" and customGpsText
+          or "(type GPS cords here)"
+      customGpsFallbackText.Color = customGpsText ~= "" and C.white or C.muted
+  end
+
+  local function updateCustomGpsTyping()
+      if not customGpsEditing then return end
+      local ctrl = iskeypressed(0x11) == true
+      local paste = iskeypressed(0x56) == true
+      if ctrl and paste and not customGpsKeys[0x100] then
+          local getter = type(getclipboard) == "function" and getclipboard
+              or type(get_clipboard) == "function" and get_clipboard
+              or type(readclipboard) == "function" and readclipboard
+          if getter then
+              local ok, value = pcall(getter)
+              if ok then customGpsText = tostring(value or "") end
+          end
+      end
+      customGpsKeys[0x100] = ctrl and paste
+      local keys = {
+          [0x30] = "0", [0x31] = "1", [0x32] = "2", [0x33] = "3", [0x34] = "4",
+          [0x35] = "5", [0x36] = "6", [0x37] = "7", [0x38] = "8", [0x39] = "9",
+          [0xBC] = ",", [0xBE] = ".", [0xBD] = "-", [0x20] = " ",
+          [0x60] = "0", [0x61] = "1", [0x62] = "2", [0x63] = "3", [0x64] = "4",
+          [0x65] = "5", [0x66] = "6", [0x67] = "7", [0x68] = "8", [0x69] = "9",
+          [0x6E] = ".", [0x6D] = "-",
+      }
+      for code, character in pairs(keys) do
+          local down = iskeypressed(code) == true
+          if down and not customGpsKeys[code] then customGpsText = customGpsText .. character end
+          customGpsKeys[code] = down
+      end
+      local backspace = iskeypressed(0x08) == true
+      if backspace and not customGpsKeys[0x08] then
+          customGpsText = customGpsText:sub(1, math.max(0, #customGpsText - 1))
+      end
+      customGpsKeys[0x08] = backspace
+      local enter = iskeypressed(0x0D) == true
+      if enter and not customGpsKeys[0x0D] then
+          customGpsEditing = false
+          pcall(setrobloxinput, true)
+      end
+      customGpsKeys[0x0D] = enter
+      updateCustomGpsDisplay()
   end
 
   local function teleportCustomGps()
@@ -940,66 +1048,44 @@
       setNavigation(false)
       releaseAt, idleSince = nil, nil
       resetTracking()
-      local text = customGpsBox and customGpsBox.Text or ""
-      if text == "" then
-          local getClipboard = type(getclipboard) == "function" and getclipboard
-          if getClipboard then
-              local ok, value = pcall(getClipboard)
-              if ok then text = tostring(value or "") end
-          end
+      local text = customGpsText
+      customGpsEditing = false
+      pcall(setrobloxinput, true)
+      local numbers = {}
+      for value in text:gmatch("[%-+]?%d+%.?%d*") do
+          numbers[#numbers + 1] = tonumber(value)
+          if #numbers == 3 then break end
       end
-      local x, y, z = text:match("([%-+]?%d+%.?%d*)%s*[, ]%s*([%-+]?%d+%.?%d*)%s*[, ]%s*([%-+]?%d+%.?%d*)")
+      local x, y, z = numbers[1], numbers[2], numbers[3]
       if not (x and y and z) then
-          npcStatus.Text = "Paste coordinates as X, Y, Z first"
+          npcStatus.Text = "Enter three GPS numbers in the GPS box"
           return
       end
       local character = player.Character
       local root = character and character:FindFirstChild("HumanoidRootPart")
       if not root then npcStatus.Text = "Waiting for your character"; return end
       local ok, err = pcall(function()
-          root.CFrame = CFrame.new(tonumber(x), tonumber(y) + 3, tonumber(z) + 3)
+          root.CFrame = CFrame.new(x, y + 3, z + 3)
       end)
-      npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", tonumber(x), tonumber(y), tonumber(z))
+      npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", x, y, z)
           or "Teleport write failed"
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
   end
 
-  -- Native controls provide real typing and paste support; Drawing objects
-  -- alone cannot receive text input from Roblox.
-  pcall(function()
-      customGpsGui = Instance.new("ScreenGui")
-      customGpsGui.Name = "FischMacroCustomGps"
-      customGpsGui.ResetOnSpawn = false
-      customGpsGui.DisplayOrder = 1000
-      customGpsGui.IgnoreGuiInset = true
-      customGpsGui.Parent = gui
-
-      customGpsBox = Instance.new("TextBox")
-      customGpsBox.Name = "Coordinates"
-      customGpsBox.PlaceholderText = "X, Y, Z"
-      customGpsBox.Text = ""
-      customGpsBox.TextSize = 14
-      customGpsBox.TextColor3 = Color3.fromRGB(255, 255, 255)
-      customGpsBox.PlaceholderColor3 = Color3.fromRGB(180, 190, 205)
-      customGpsBox.BackgroundColor3 = Color3.fromRGB(35, 42, 56)
-      customGpsBox.BorderColor3 = Color3.fromRGB(143, 162, 187)
-      customGpsBox.ClearTextOnFocus = false
-      customGpsBox.ZIndex = 10
-      customGpsBox.Visible = false
-      customGpsBox.Parent = customGpsGui
-
-      customGpsButton = Instance.new("TextButton")
-      customGpsButton.Name = "Teleport"
-      customGpsButton.Text = "Teleport"
-      customGpsButton.TextSize = 14
-      customGpsButton.TextColor3 = Color3.fromRGB(0, 0, 0)
-      customGpsButton.BackgroundColor3 = Color3.fromRGB(90, 255, 130)
-      customGpsButton.BorderColor3 = Color3.fromRGB(30, 130, 55)
-      customGpsButton.ZIndex = 10
-      customGpsButton.Visible = false
-      customGpsButton.Parent = customGpsGui
-      customGpsButton.Activated:Connect(teleportCustomGps)
-  end)
+  customGpsFallbackBox = add("Square", 14, 397)
+  customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
+  customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
+  customGpsFallbackBox.Filled = true
+  customGpsFallbackBox.Visible = false
+  npcMenuDrawings[customGpsFallbackBox] = 397
+  customGpsFallbackText = label("(type GPS cords here)", 20, 402, 10)
+  customGpsFallbackText.Color = C.muted
+  customGpsFallbackText.Visible = false
+  npcMenuDrawings[customGpsFallbackText] = 397
+  customGpsFallbackButton = label("GPS Teleport", 88, 428, 12)
+  customGpsFallbackButton.Color = Color3.fromRGB(90, 255, 130)
+  customGpsFallbackButton.Visible = false
+  npcMenuDrawings[customGpsFallbackButton] = 425
 
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
@@ -1027,6 +1113,12 @@
       local down = value == true or (type(value) == "number" and value ~= 0)
       local localX = inside and (x - lastPanelX) / uiScale or 0
       local localY = inside and (y - lastPanelY) / uiScale or 0
+      updateCustomGpsTyping()
+      if customGpsEditing and inside and down and not leftWasDown
+          and not (localY >= 397 and localY < 425) then
+          customGpsEditing = false
+          pcall(setrobloxinput, true)
+      end
 
       if inside and not dragging and down and not leftWasDown
           and localX >= 10 and localX <= 147
@@ -1050,23 +1142,45 @@
           and localY >= 287 and localY <= 313 then
           toggleInstant()
       end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 263 and localY <= 285 then
+          toggleMacro()
+      end
       if inside and not dragging and down and not leftWasDown then
           if localY >= 357 and localY <= 387 then
               npcMenuOpen = not npcMenuOpen
               if npcMenuOpen then totemMenu.open, islandMenu.open = false, false end
-              if not npcMenuOpen then totemMenu.open, islandMenu.open = false, false end
+              if not npcMenuOpen then
+                  totemMenu.open, islandMenu.open = false, false
+                  customGpsEditing = false
+              end
               layoutTeleportMenus()
-          elseif npcMenuOpen and localY >= 397 and localY < 424 then
+          elseif npcMenuOpen and localY >= 397 and localY < 425 then
+              customGpsEditing = true
+              customGpsKeys = {}
+              pcall(setrobloxinput, false)
+              updateCustomGpsDisplay()
+          elseif npcMenuOpen and localY >= 452 and localY < 480 then
+              npcSubOpen = not npcSubOpen
+              layoutTeleportMenus()
+          elseif npcMenuOpen and localY >= 425 and localY < 452 then
               teleportCustomGps()
-          elseif localY >= islandMenu.top and localY < islandMenu.top + 32 then
+          elseif npcMenuOpen and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
-              if islandMenu.open then npcMenuOpen, totemMenu.open = false, false end
+              if islandMenu.open then
+                  totemMenu.open = false
+                  totemMenu.anim = 0
+              end
               layoutTeleportMenus()
-          elseif localY >= totemMenu.top and localY < totemMenu.top + 32 then
+          elseif npcMenuOpen and localY >= totemMenu.top and localY < totemMenu.top + 32 then
               totemMenu.open = not totemMenu.open
-              if totemMenu.open then npcMenuOpen, islandMenu.open = false, false end
+              if totemMenu.open then
+                  islandMenu.open = false
+                  islandMenu.anim = 0
+              end
               layoutTeleportMenus()
-          elseif islandMenu.open then
+          elseif npcMenuOpen and islandMenu.open then
               local offset = localY - islandMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#islandMenu.rows / islandMenu.pageSize)
@@ -1078,7 +1192,7 @@
                   local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + slot]
                   if row then teleportIsland(row) end
               end
-          elseif totemMenu.open then
+          elseif npcMenuOpen and totemMenu.open then
               local offset = localY - totemMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
@@ -1688,6 +1802,30 @@
       end)
   end
 
+  toggleMacro = function()
+      updateSession(tick())
+      enabled = not enabled
+      macroText.Text = enabled and "RCTRL Macro ON" or "RCTRL Macro OFF"
+      macroText.Color = enabled and C.instantOn or C.instantOff
+      equipPending = enabled and equippedRod() == nil
+      equipReadyAt = 0
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      recoveryStage = 0
+      nextCast = tick()
+      wasReeling = false
+      resetTracking()
+      if enabled then
+          started, elapsed = tick(), 0
+          catchBase = catches()
+          sessionCaught = catchBase and 0 or nil
+      end
+      nextStats = 0
+      nextEnvironment = 0
+  end
+
   local function updateInstant(now, focused)
       if not instantEnabled or not focused or now < nextInstant then return end
       nextInstant = now + 0.05
@@ -1881,9 +2019,10 @@
   layoutTeleportMenus()
   display("OFF")
 
-  previous[0x50] = iskeypressed(0x50) == true
+  previous[MACRO_KEY] = iskeypressed(MACRO_KEY) == true
+  previous[0x9D] = iskeypressed(0x9D) == true -- Right Ctrl scan code
   previous[0xDD] = iskeypressed(0xDD) == true
-  previous[0x4C] = iskeypressed(0x4C) == true
+  previous[INSTANT_KEY] = iskeypressed(INSTANT_KEY) == true
 
   -- Force the GUI into its intended initial visible state.
   shown = true
@@ -1895,10 +2034,19 @@
       local ok, err = pcall(function()
           while alive do
               local now = tick()
-              local toggle = edge(0x50) -- P
-              local instantToggle = edge(0x4C) -- L
+              local macroPrimary = edge(MACRO_KEY)
+              local macroScan = edge(0x9D)
+              local toggle = macroPrimary or macroScan -- Right Ctrl
+              local instantToggle = edge(INSTANT_KEY) -- Right Alt
               local hide = edge(0xDD) -- ]
               local focused = isrbxactive()
+              local typing = false
+              pcall(function()
+                  typing = UserInputService:GetFocusedTextBox() ~= nil
+              end)
+              if typing then
+                  toggle, instantToggle = false, false
+              end
 
               if not focused then
                   navigationWanted = navigationOn
@@ -1915,29 +2063,7 @@
                   if instantToggle then toggleInstant() end
 
                   if toggle then
-                      updateSession(now)
-                      enabled = not enabled
-                      equipPending = enabled and equippedRod() == nil
-                      equipReadyAt = 0
-
-                      mouse(false)
-                      releaseKey()
-                      setNavigation(false)
-
-                      releaseAt, idleSince = nil, nil
-                      recoveryStage = 0
-                      nextCast = now
-                      wasReeling = false
-                      resetTracking()
-
-                      if enabled then
-                          started, elapsed = now, 0
-                          catchBase = catches()
-                          sessionCaught = catchBase and 0 or nil
-                      end
-
-                      nextStats = 0
-                      nextEnvironment = 0
+                      toggleMacro()
                   end
               end
 
