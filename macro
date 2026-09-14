@@ -121,7 +121,6 @@
       drawings = {},
       slots = {}
   }
-  local customGpsGui, customGpsBox, customGpsButton
   local customGpsFallbackBox, customGpsFallbackText, customGpsFallbackButton
   local customGpsText = ""
   local customGpsEditing = false
@@ -256,13 +255,6 @@
   npcLabel("Rare Goods Dealer", 26, 616, 12)
   npcLabel("Elder Kaito", 26, 644, 12)
   local npcStatus = npcLabel("Click a name to teleport", 14, 675, 10, C.muted)
-  -- Keep a fallback position for the Rare Goods Dealer if its model is absent.
-  local rareGoodsDealerStartPosition
-  do
-      local character = player.Character
-      local root = character and character:FindFirstChild("HumanoidRootPart")
-      if root then rareGoodsDealerStartPosition = root.Position end
-  end
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
       {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526, preferHead = true},
@@ -731,15 +723,6 @@
       if row.skipNpc then
           pos = row.pos and Vector3.new(row.pos[1], row.pos[2], row.pos[3])
           live = false
-      elseif row.useStartPosition then
-          -- If the character was still loading when the script started,
-          -- capture the current position on the first click as a fallback.
-          pos = rareGoodsDealerStartPosition or root.Position
-          live = false
-      elseif row.useCurrentPosition then
-          -- Elder Kaito may also be unloaded; keep the player's current spot.
-          pos = root.Position
-          live = false
       else
           local ok
           ok, pos = pcall(findNpcPosition, row)
@@ -1150,8 +1133,9 @@
       if inside and not dragging and down and not leftWasDown then
           if localY >= 357 and localY <= 387 then
               npcMenuOpen = not npcMenuOpen
-              if npcMenuOpen then totemMenu.open, islandMenu.open = false, false end
-              if not npcMenuOpen then
+              if npcMenuOpen then
+                  totemMenu.open, islandMenu.open = false, false
+              else
                   totemMenu.open, islandMenu.open = false, false
                   customGpsEditing = false
               end
@@ -1873,12 +1857,6 @@
       for _, d in ipairs(drawings) do
           d:Remove()
       end
-      if customGpsGui then
-          pcall(function() customGpsGui:Destroy() end)
-          customGpsGui = nil
-          customGpsBox, customGpsButton = nil, nil
-      end
-
       _G.StopFischMacro = nil
   end
 
