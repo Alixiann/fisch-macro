@@ -28,6 +28,9 @@
   end
 
   local gui = player and player:FindFirstChild("PlayerGui") or nil
+  if player and not gui then
+      gui = player:WaitForChild("PlayerGui")
+  end
 
   -- Don't touch ReplicatedStorage.world during startup.
   -- Some executors/games initialize it slightly later.
@@ -103,6 +106,16 @@
       drawings = {},
       slots = {}
   }
+  local islandMenu = {
+      open = false,
+      anim = 0,
+      page = 1,
+      pageSize = 6,
+      top = 420,
+      drawings = {},
+      slots = {}
+  }
+  local customGpsGui, customGpsBox, customGpsButton
 
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
@@ -177,9 +190,21 @@
   local fishText = label("Caught    --", 14, 69, 14)
   local timerText = label("Runtime   00:00:00", 14, 91, 14)
   local clockText = label("Server    --", 14, 113, 14)
-  local eventHeading = label("WEATHER / EVENTS", 14, 139, 10)
+  -- Matcha fixes Text outlines to black, so layer white copies behind the
+  -- heading to create a readable white outline instead.
+  local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 13, 139, 12)
+  local eventHeadingOutlineRight = label("WEATHER / EVENTS", 15, 139, 12)
+  local eventHeadingOutlineUp = label("WEATHER / EVENTS", 14, 138, 12)
+  local eventHeadingOutlineDown = label("WEATHER / EVENTS", 14, 140, 12)
+  for _, outline in ipairs({
+      eventHeadingOutlineLeft, eventHeadingOutlineRight,
+      eventHeadingOutlineUp, eventHeadingOutlineDown,
+  }) do
+      outline.Color = C.white
+  end
+  local eventHeading = label("WEATHER / EVENTS", 14, 139, 12)
   eventHeading.Color = Color3.fromRGB(25, 60, 130) -- dark blue
-  eventHeading.Outline = true
+  eventHeading.Outline = false
 
   local weatherText = label("--", 14, 156, 12)
 
@@ -199,7 +224,7 @@
   label("Click toggles | Right-drag to move", 14, 341, 9)
 
   -- NPC menu: world names are resolved at click time; no purchases are sent.
-  local npcToggleText = label("NPC teleports", 14, 365, 12)
+  local npcToggleText = label("Teleports", 14, 365, 12)
   npcToggleText.Color = C.cyan
   local npcArrow = label("v", 251, 363, 16)
   local function npcLabel(text, x, y, size, color)
@@ -209,17 +234,18 @@
       d.Visible = false
       return d
   end
-  npcLabel("BUFFERS", 14, 397, 11, C.cyan)
-  npcLabel("Merlin", 26, 421, 12)
-  npcLabel("Astronomer Vega", 26, 449, 12)
-  npcLabel("SHOPS", 14, 481, 11, C.cyan)
-  npcLabel("Daily Shopkeeper", 26, 505, 12)
-  npcLabel("Rare Goods Dealer", 26, 533, 12)
-  npcLabel("Elder Kaito", 26, 561, 12)
-  local npcStatus = npcLabel("Click a name to teleport", 14, 592, 10, C.muted)
-  -- The Rare Goods Dealer can be absent from the loaded world.  Save the
-  -- position where this script starts so its menu entry can return here
-  -- without needing to resolve the dealer model.
+  npcLabel("CUSTOM GPS", 14, 397, 11, C.cyan)
+  npcLabel("Type X, Y, Z below, then press Teleport", 26, 421, 10, C.muted)
+  npcLabel("NPC TELEPORTS", 14, 452, 11, C.cyan)
+  npcLabel("BUFFERS", 14, 480, 11, C.cyan)
+  npcLabel("Merlin", 26, 504, 12)
+  npcLabel("Astronomer Vega", 26, 532, 12)
+  npcLabel("SHOPS", 14, 564, 11, C.cyan)
+  npcLabel("Daily Shopkeeper", 26, 588, 12)
+  npcLabel("Rare Goods Dealer", 26, 616, 12)
+  npcLabel("Elder Kaito", 26, 644, 12)
+  local npcStatus = npcLabel("Click a name to teleport", 14, 675, 10, C.muted)
+  -- Keep a fallback position for the Rare Goods Dealer if its model is absent.
   local rareGoodsDealerStartPosition
   do
       local character = player.Character
@@ -227,11 +253,11 @@
       if root then rareGoodsDealerStartPosition = root.Position end
   end
   local npcRows = {
-      {name = "Merlin", aliases = {"merlin"}, y = 415, pos = {-943, 224, -988}},
-      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 443},
-      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 499, pos = {229, 139, 42}},
-      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 527, useStartPosition = true},
-      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 555},
+      {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
+      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526},
+      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 582, pos = {229, 139, 42}},
+      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 610, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
+      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, useCurrentPosition = true},
   }
   -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
   totemMenu.rows = {
@@ -264,6 +290,47 @@
   totemMenu.pageLabel = totemLabel("1 / 3", 113, 204, 11, C.muted)
   totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
   totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
+
+  islandMenu.rows = {
+      {name = "Moosewood", pos = {350, 135, 250}},
+      {name = "Roslit Bay", pos = {-1450, 135, 750}},
+      {name = "Sunstone Island", pos = {-935, 130, -1105}},
+      {name = "Terrapin Island", pos = {-190, 130, 1925}},
+      {name = "Forsaken Shores", pos = {-2425, 135, 1555}},
+      {name = "Snowcap Island", pos = {2600, 150, 2400}},
+      {name = "Mushgrove Swamp", pos = {2425, 127, -670}},
+      {name = "Desolate Deep", pos = {-790, 110, -3100}},
+      {name = "Ancient Isle", pos = {6050, 195, 330}},
+      {name = "Northern Expedition", pos = {19977, 917, 5375}},
+      {name = "Tidefall", pos = {3223, 130, 850}},
+      {name = "Skycrest", match = {"skycrest", "skycrestisland"}, pos = {-25990, 3094, -5036}},
+      {name = "Cursed Isle", pos = {1860, 127, 1210}},
+      {name = "Grand Reef", pos = {-3530, 130, 550}},
+      {name = "Dry Lands", match = {"drylands", "dryland"}, pos = {-23525, 2630, -5750}, offset = {0, -8, 18}},
+      {name = "Lost Jungle", pos = {-2680, 154, -2078}},
+      {name = "Scoria Reach", pos = {-4781, 138, -1378}},
+      {name = "Statue of Sovereignty", pos = {20, 160, -1040}},
+      {name = "The Deep", pos = {228, 130, -11945}},
+      {name = "Everturn Forest", pos = {2365, 130, -2330}},
+      {name = "Castaway Cliffs", pos = {690, 135, -1693}},
+  }
+  islandMenu.title = label("Islands", 14, 428, 12)
+  islandMenu.title.Color = C.cyan
+  islandMenu.arrow = label("v", 251, 426, 16)
+  local function islandLabel(text, x, offset, size, color)
+      local d = label(text, x, islandMenu.top + offset, size)
+      d.Color = color or C.white
+      islandMenu.drawings[d] = offset
+      d.Visible = false
+      return d
+  end
+  for i = 1, islandMenu.pageSize do
+      islandMenu.slots[i] = islandLabel("", 26, 38 + (i - 1) * 27, 12)
+  end
+  islandMenu.prev = islandLabel("< Prev", 14, 204, 11, C.cyan)
+  islandMenu.pageLabel = islandLabel("1 / 2", 113, 204, 11, C.muted)
+  islandMenu.next = islandLabel("Next >", 213, 204, 11, C.cyan)
+  islandMenu.status = islandLabel("Click to teleport", 14, 229, 10, C.muted)
 
   local function npcName(value)
       return tostring(value):lower():gsub("[^%w]", "")
@@ -404,6 +471,16 @@
 
       lastPanelX, lastPanelY = x, y
 
+      if customGpsBox and customGpsButton then
+          customGpsBox.Position = UDim2.fromOffset(x + 14 * uiScale, y + 397 * uiScale)
+          customGpsBox.Size = UDim2.fromOffset((PANEL_W - 28) * uiScale, 24 * uiScale)
+          customGpsButton.Position = UDim2.fromOffset(x + 14 * uiScale, y + 425 * uiScale)
+          customGpsButton.Size = UDim2.fromOffset((PANEL_W - 28) * uiScale, 24 * uiScale)
+          local visible = shown and npcMenuOpen
+          customGpsBox.Visible = visible
+          customGpsButton.Visible = visible
+      end
+
       for _, entry in ipairs(layout) do
           entry.d.Position = Vector2.new(x + entry.x * uiScale, y + entry.y * uiScale)
           local ok, size = pcall(function() return entry.d.Size end)
@@ -482,6 +559,11 @@
               menuAlpha = npcMenuAnim
           elseif totemMenu.drawings[entry.d] then
               menuAlpha = totemMenu.anim
+          elseif islandMenu.drawings[entry.d] then
+              menuAlpha = islandMenu.anim
+          elseif entry.d == totemMenu.title or entry.d == totemMenu.arrow
+              or entry.d == islandMenu.title or entry.d == islandMenu.arrow then
+              menuAlpha = npcMenuAnim
           elseif entry.d == menuBackdrop then
               menuAlpha = math.max(npcMenuAnim, totemMenu.anim)
           end
@@ -628,6 +710,10 @@
           -- capture the current position on the first click as a fallback.
           pos = rareGoodsDealerStartPosition or root.Position
           live = false
+      elseif row.useCurrentPosition then
+          -- Elder Kaito may also be unloaded; keep the player's current spot.
+          pos = root.Position
+          live = false
       else
           local ok
           ok, pos = pcall(findNpcPosition, row)
@@ -642,7 +728,11 @@
           return
       end
       local moved, err = pcall(function()
-          root.CFrame = CFrame.new(pos.X, pos.Y + 2, pos.Z + 4)
+          root.CFrame = CFrame.new(
+              pos.X,
+              pos.Y + (row.exactPosition and 0 or 2),
+              pos.Z + (row.exactPosition and 0 or 4)
+          )
       end)
       if not moved then
           npcStatus.Text = "Teleport write failed"
@@ -659,13 +749,15 @@
 
   local function layoutTeleportMenus()
       -- Tiny slide animation:
-      -- NPC expansion pushes the Totems header down smoothly.
-      -- Totem expansion grows the bottom of the panel smoothly.
-      totemMenu.top = 388 + 229 * npcMenuAnim
+      -- NPC expansion pushes the Totems header down smoothly. Totems then
+      -- push the Islands header down, and Islands grow the panel bottom.
+      totemMenu.top = 388 + 312 * npcMenuAnim
+      islandMenu.top = totemMenu.top + 32 + 221 * totemMenu.anim
       npcArrow.Text = npcMenuOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
+      islandMenu.arrow.Text = islandMenu.open and "^" or "v"
 
-      PANEL_H = totemMenu.top + 32 + 221 * totemMenu.anim
+      PANEL_H = islandMenu.top + 32 + 221 * islandMenu.anim
 
       -- Do NOT write the raw/unscaled Size here.
       -- positionPanel() applies uiScale from baseSize below. Writing the
@@ -695,6 +787,10 @@
               entry.y = totemMenu.top + 8
           elseif entry.d == totemMenu.arrow then
               entry.y = totemMenu.top + 6
+          elseif entry.d == islandMenu.title then
+              entry.y = islandMenu.top + 8
+          elseif entry.d == islandMenu.arrow then
+              entry.y = islandMenu.top + 6
           elseif npcMenuDrawings[entry.d] then
               -- Content rises the last few pixels while fading in.
               entry.y = npcMenuDrawings[entry.d] - (1 - npcMenuAnim) * 6
@@ -711,6 +807,12 @@
 
       totemMenu.pageLabel.Text = totemMenu.page .. " / "
           .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
+      for i, d in ipairs(islandMenu.slots) do
+          local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + i]
+          d.Text = row and row.name or ""
+      end
+      islandMenu.pageLabel.Text = islandMenu.page .. " / "
+          .. math.ceil(#islandMenu.rows / islandMenu.pageSize)
 
       -- Keep the panel anchored in the same place while its height animates.
       panelX, panelY = lastPanelX, lastPanelY
@@ -724,17 +826,22 @@
 
       local npcTarget = npcMenuOpen and 1 or 0
       local totemTarget = totemMenu.open and 1 or 0
+      local islandTarget = islandMenu.open and 1 or 0
 
       -- Exponential easing gives a short, soft pop without feeling floaty.
       local blend = 1 - math.exp(-dt * 24)
       npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
       totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
+      islandMenu.anim = islandMenu.anim + (islandTarget - islandMenu.anim) * blend
 
       if math.abs(npcMenuAnim - npcTarget) < 0.002 then
           npcMenuAnim = npcTarget
       end
       if math.abs(totemMenu.anim - totemTarget) < 0.002 then
           totemMenu.anim = totemTarget
+      end
+      if math.abs(islandMenu.anim - islandTarget) < 0.002 then
+          islandMenu.anim = islandTarget
       end
 
       layoutTeleportMenus()
@@ -784,6 +891,115 @@
           or "Teleport write failed"
       if not ok then warn("Totem teleport: " .. tostring(err)) end
   end
+
+  local function findIslandPosition(row)
+      if not row.match then return nil end
+      for _, object in ipairs(W:GetDescendants()) do
+          local normalized = npcName(object.Name)
+          for _, alias in ipairs(row.match) do
+              if normalized == alias then
+                  local part
+                  if object:IsA("BasePart") then
+                      part = object
+                  elseif object.ClassName == "Model" then
+                      part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+                  end
+                  if part then return part.Position end
+              end
+          end
+      end
+  end
+
+  local function teleportIsland(row)
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then islandMenu.status.Text = "Waiting for your character"; return end
+      local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local live = false
+      local okFind, livePos = pcall(findIslandPosition, row)
+      if okFind and livePos then pos, live = livePos, true end
+      local offset = row.offset or {0, 0, 0}
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
+      end)
+      islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
+      if not ok then warn("Island teleport: " .. tostring(err)) end
+  end
+
+  local function teleportCustomGps()
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      local text = customGpsBox and customGpsBox.Text or ""
+      if text == "" then
+          local getClipboard = type(getclipboard) == "function" and getclipboard
+          if getClipboard then
+              local ok, value = pcall(getClipboard)
+              if ok then text = tostring(value or "") end
+          end
+      end
+      local x, y, z = text:match("([%-+]?%d+%.?%d*)%s*[, ]%s*([%-+]?%d+%.?%d*)%s*[, ]%s*([%-+]?%d+%.?%d*)")
+      if not (x and y and z) then
+          npcStatus.Text = "Paste coordinates as X, Y, Z first"
+          return
+      end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then npcStatus.Text = "Waiting for your character"; return end
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(tonumber(x), tonumber(y) + 3, tonumber(z) + 3)
+      end)
+      npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", tonumber(x), tonumber(y), tonumber(z))
+          or "Teleport write failed"
+      if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
+  end
+
+  -- Native controls provide real typing and paste support; Drawing objects
+  -- alone cannot receive text input from Roblox.
+  pcall(function()
+      customGpsGui = Instance.new("ScreenGui")
+      customGpsGui.Name = "FischMacroCustomGps"
+      customGpsGui.ResetOnSpawn = false
+      customGpsGui.DisplayOrder = 1000
+      customGpsGui.IgnoreGuiInset = true
+      customGpsGui.Parent = gui
+
+      customGpsBox = Instance.new("TextBox")
+      customGpsBox.Name = "Coordinates"
+      customGpsBox.PlaceholderText = "X, Y, Z"
+      customGpsBox.Text = ""
+      customGpsBox.TextSize = 14
+      customGpsBox.TextColor3 = Color3.fromRGB(255, 255, 255)
+      customGpsBox.PlaceholderColor3 = Color3.fromRGB(180, 190, 205)
+      customGpsBox.BackgroundColor3 = Color3.fromRGB(35, 42, 56)
+      customGpsBox.BorderColor3 = Color3.fromRGB(143, 162, 187)
+      customGpsBox.ClearTextOnFocus = false
+      customGpsBox.ZIndex = 10
+      customGpsBox.Visible = false
+      customGpsBox.Parent = customGpsGui
+
+      customGpsButton = Instance.new("TextButton")
+      customGpsButton.Name = "Teleport"
+      customGpsButton.Text = "Teleport"
+      customGpsButton.TextSize = 14
+      customGpsButton.TextColor3 = Color3.fromRGB(0, 0, 0)
+      customGpsButton.BackgroundColor3 = Color3.fromRGB(90, 255, 130)
+      customGpsButton.BorderColor3 = Color3.fromRGB(30, 130, 55)
+      customGpsButton.ZIndex = 10
+      customGpsButton.Visible = false
+      customGpsButton.Parent = customGpsGui
+      customGpsButton.Activated:Connect(teleportCustomGps)
+  end)
 
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
@@ -837,12 +1053,31 @@
       if inside and not dragging and down and not leftWasDown then
           if localY >= 357 and localY <= 387 then
               npcMenuOpen = not npcMenuOpen
-              if npcMenuOpen then totemMenu.open = false end
+              if npcMenuOpen then totemMenu.open, islandMenu.open = false, false end
+              if not npcMenuOpen then totemMenu.open, islandMenu.open = false, false end
+              layoutTeleportMenus()
+          elseif npcMenuOpen and localY >= 397 and localY < 424 then
+              teleportCustomGps()
+          elseif localY >= islandMenu.top and localY < islandMenu.top + 32 then
+              islandMenu.open = not islandMenu.open
+              if islandMenu.open then npcMenuOpen, totemMenu.open = false, false end
               layoutTeleportMenus()
           elseif localY >= totemMenu.top and localY < totemMenu.top + 32 then
               totemMenu.open = not totemMenu.open
-              if totemMenu.open then npcMenuOpen = false end
+              if totemMenu.open then npcMenuOpen, islandMenu.open = false, false end
               layoutTeleportMenus()
+          elseif islandMenu.open then
+              local offset = localY - islandMenu.top
+              if offset >= 198 and offset < 224 then
+                  local pages = math.ceil(#islandMenu.rows / islandMenu.pageSize)
+                  if localX < 95 then islandMenu.page = math.max(1, islandMenu.page - 1)
+                  elseif localX > 190 then islandMenu.page = math.min(pages, islandMenu.page + 1) end
+                  layoutTeleportMenus()
+              elseif offset >= 32 and offset < 32 + islandMenu.pageSize * 27 then
+                  local slot = math.floor((offset - 32) / 27) + 1
+                  local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + slot]
+                  if row then teleportIsland(row) end
+              end
           elseif totemMenu.open then
               local offset = localY - totemMenu.top
               if offset >= 198 and offset < 224 then
@@ -1321,6 +1556,10 @@
   local function environmentText(events, now)
       if #events == 0 then
           eventHeading.Text = "WEATHER / EVENTS"
+          eventHeadingOutlineLeft.Text = eventHeading.Text
+          eventHeadingOutlineRight.Text = eventHeading.Text
+          eventHeadingOutlineUp.Text = eventHeading.Text
+          eventHeadingOutlineDown.Text = eventHeading.Text
           return "Unavailable"
       end
 
@@ -1334,6 +1573,10 @@
           "WEATHER / EVENTS  %d ACTIVE%s", #events,
           pages > 1 and string.format("  %d/%d", page + 1, pages) or ""
       )
+      eventHeadingOutlineLeft.Text = eventHeading.Text
+      eventHeadingOutlineRight.Text = eventHeading.Text
+      eventHeadingOutlineUp.Text = eventHeading.Text
+      eventHeadingOutlineDown.Text = eventHeading.Text
 
       local lines = {}
       for i = first, last do
@@ -1491,6 +1734,11 @@
 
       for _, d in ipairs(drawings) do
           d:Remove()
+      end
+      if customGpsGui then
+          pcall(function() customGpsGui:Destroy() end)
+          customGpsGui = nil
+          customGpsBox, customGpsButton = nil, nil
       end
 
       _G.StopFischMacro = nil
