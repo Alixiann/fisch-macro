@@ -10,7 +10,7 @@
   local FAILSAFE = 20
   local ENTER_INTERVAL = 0.10
   local KEY_HOLD = 0.06
-  local FADE_SECONDS = 0.22
+  local FADE_SECONDS = 0.65
   local ENVIRONMENT_INTERVAL = 2
   local EVENT_SCROLL_SECONDS = 4
   local Players = game:GetService("Players")
@@ -29,7 +29,7 @@
       gui = player:WaitForChild("PlayerGui")
   end
   local world = nil
-  local alive, enabled, shown = true, false, true
+  local alive, enabled, shown = true, false, false
   local harpoonPullEnabled = false
   local instantEnabled, instantLoading = false, false
   local instantCache, instantOriginal
@@ -79,7 +79,7 @@
       instantOff = Color3.fromRGB(255, 0, 0),
   }
   local PANEL_W, PANEL_H = 278, 420
-  local uiScale = 1.1
+  local uiScale = 1.2
   local MIN_UI_SCALE = 0.80
   local MAX_UI_SCALE = 1.30
   local UI_SCALE_STEP = 0.10
@@ -99,6 +99,7 @@
       drawings = {},
       slots = {}
   }
+  totemMenu.startupIntro = {active = true, started = tick(), amount = 0, drawings = {}}
   local islandMenu = {
       open = false,
       anim = 0,
@@ -156,6 +157,53 @@
       d.Color = Color3.fromRGB(255, 255, 255)
       return d
   end
+  totemMenu.startupIntro.title = Drawing.new("Text")
+  totemMenu.startupIntro.title.Text = "Fisch Matcha Macro"
+  totemMenu.startupIntro.title.Size = 26
+  totemMenu.startupIntro.title.Font = 7
+  totemMenu.startupIntro.title.Center = true
+  totemMenu.startupIntro.title.Outline = true
+  totemMenu.startupIntro.title.Color = C.pink
+  totemMenu.startupIntro.title.Visible = false
+  totemMenu.startupIntro.title.ZIndex = 1000
+  totemMenu.startupIntro.line = Drawing.new("Line")
+  totemMenu.startupIntro.line.Thickness = 2
+  totemMenu.startupIntro.line.Color = C.pink
+  totemMenu.startupIntro.line.Visible = false
+  totemMenu.startupIntro.line.ZIndex = 1000
+  totemMenu.startupIntro.byline = Drawing.new("Text")
+  totemMenu.startupIntro.byline.Text = "made by: 1a"
+  totemMenu.startupIntro.byline.Size = 12
+  totemMenu.startupIntro.byline.Font = 7
+  totemMenu.startupIntro.byline.Center = true
+  totemMenu.startupIntro.byline.Outline = true
+  totemMenu.startupIntro.byline.Color = C.muted
+  totemMenu.startupIntro.byline.Visible = false
+  totemMenu.startupIntro.byline.ZIndex = 1000
+  totemMenu.startupIntro.circle = Drawing.new("Circle")
+  totemMenu.startupIntro.circle.Radius = 190
+  totemMenu.startupIntro.circle.NumSides = 64
+  totemMenu.startupIntro.circle.Filled = true
+  totemMenu.startupIntro.circle.Color = C.white
+  totemMenu.startupIntro.circle.Transparency = 1
+  totemMenu.startupIntro.circle.Visible = false
+  totemMenu.startupIntro.circle.ZIndex = 999
+  totemMenu.startupIntro.circleOutline = Drawing.new("Circle")
+  totemMenu.startupIntro.circleOutline.Radius = 190
+  totemMenu.startupIntro.circleOutline.NumSides = 64
+  totemMenu.startupIntro.circleOutline.Filled = false
+  totemMenu.startupIntro.circleOutline.Thickness = 2
+  totemMenu.startupIntro.circleOutline.Color = C.pink
+  totemMenu.startupIntro.circleOutline.Transparency = 1
+  totemMenu.startupIntro.circleOutline.Visible = false
+  totemMenu.startupIntro.circleOutline.ZIndex = 1000
+  totemMenu.startupIntro.drawings = {
+      totemMenu.startupIntro.circle,
+      totemMenu.startupIntro.circleOutline,
+      totemMenu.startupIntro.title,
+      totemMenu.startupIntro.line,
+      totemMenu.startupIntro.byline,
+  }
   local titleText = label("Fisch Macro", 14, 13, 20)
   titleText.Color = C.pink
   local resizeMinus = label("-", PANEL_W - 48, 12, 17)
@@ -606,6 +654,52 @@
           end
           entry.d.Transparency = entry.opacity * fadeAmount * menuAlpha
           entry.d.Visible = fadeAmount > 0.001 and menuAlpha > 0.001
+      end
+  end
+  totemMenu.updateStartupIntro = function(now)
+      if not totemMenu.startupIntro.active then return end
+      local elapsed = now - totemMenu.startupIntro.started
+      local fadeIn = math.clamp(elapsed / 0.65, 0, 1)
+      local fadeOut = math.clamp((2.30 - elapsed) / 0.65, 0, 1)
+      totemMenu.startupIntro.amount = math.min(fadeIn, fadeOut)
+      local camera = W:FindFirstChildOfClass("Camera")
+      local viewport = camera and camera.ViewportSize
+      if viewport then
+          local centerX, centerY = viewport.X / 2, viewport.Y / 2
+          totemMenu.startupIntro.circle.Position = Vector2.new(centerX, centerY)
+          totemMenu.startupIntro.circleOutline.Position = Vector2.new(centerX, centerY)
+          totemMenu.startupIntro.title.Position = Vector2.new(centerX, centerY - 28)
+          totemMenu.startupIntro.line.From = Vector2.new(centerX - 118, centerY + 8)
+          totemMenu.startupIntro.line.To = Vector2.new(centerX + 118, centerY + 8)
+          totemMenu.startupIntro.byline.Position = Vector2.new(centerX, centerY + 17)
+      end
+      totemMenu.startupIntro.circle.Color = Color3.new(
+          1 + (C.bg.R - 1) * fadeIn,
+          1 + (C.bg.G - 1) * fadeIn,
+          1 + (C.bg.B - 1) * fadeIn
+      )
+      totemMenu.startupIntro.title.Color = Color3.new(
+          1 + (C.pink.R - 1) * fadeIn,
+          1 + (C.pink.G - 1) * fadeIn,
+          1 + (C.pink.B - 1) * fadeIn
+      )
+      totemMenu.startupIntro.byline.Color = Color3.new(
+          1 + (C.muted.R - 1) * fadeIn,
+          1 + (C.muted.G - 1) * fadeIn,
+          1 + (C.muted.B - 1) * fadeIn
+      )
+      for _, drawing in ipairs(totemMenu.startupIntro.drawings) do
+          drawing.Transparency = 1 - totemMenu.startupIntro.amount
+          drawing.Visible = true
+      end
+      if elapsed >= 3.30 then
+          totemMenu.startupIntro.active = false
+          shown = true
+          fadeAmount = 0
+          fadeLastTime = now
+          for _, drawing in ipairs(totemMenu.startupIntro.drawings) do
+              drawing.Visible = false
+          end
       end
   end
   local function display(message)
@@ -1765,9 +1859,17 @@
       for _, d in ipairs(drawings) do
           d:Remove()
       end
+      for _, d in ipairs(totemMenu.startupIntro.drawings) do
+          d:Remove()
+      end
       _G.StopFischMacro = nil
   end
   _G.StopFischMacro = stop
+  pcall(function()
+      table.insert(inputConnections, player.AncestryChanged:Connect(function(_, parent)
+          if not parent then stop() end
+      end))
+  end)
   local function edge(key)
       local value = iskeypressed(key)
       local current = value == true
@@ -1881,8 +1983,11 @@
   previous[0xDB] = iskeypressed(0xDB) == true
   previous[0x1A] = iskeypressed(0x1A) == true
   previous[INSTANT_KEY] = iskeypressed(INSTANT_KEY) == true
-  shown = true
-  fadeAmount = 1
+  shown = false
+  fadeAmount = 0
+  totemMenu.startupIntro.active = true
+  totemMenu.startupIntro.started = tick()
+  totemMenu.startupIntro.amount = 0
   fadeLastTime = tick()
   updateFade(fadeLastTime)
   task.spawn(function()
@@ -2077,6 +2182,7 @@
                   nextStats = now + 0.5
               end
               updateDropdownAnimation(now)
+              totemMenu.updateStartupIntro(now)
               updateFade(now)
               task.wait(0.01)
           end
