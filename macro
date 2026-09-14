@@ -227,7 +227,7 @@
   local instantText = label("RALT Instant catch OFF", 14, 292, 11)
   instantText.Color = C.instantOff
   local castModeText = label("Instant cast", 14, 316, 11)
-  castModeText.Color = C.blue
+  castModeText.Color = C.instantOff
   label("(u have to catch a", 151, 291, 9)
   label("fish first before", 151, 303, 9)
   label("enabling)", 151, 315, 9)
@@ -254,13 +254,16 @@
   npcLabel("Daily Shopkeeper", 26, 588, 12)
   npcLabel("Rare Goods Dealer", 26, 616, 12)
   npcLabel("Elder Kaito", 26, 644, 12)
-  local npcStatus = npcLabel("Click a name to teleport", 14, 675, 10, C.muted)
+  npcLabel("ETC", 14, 672, 11, Color3.fromRGB(255, 175, 90))
+  npcLabel("Shells", 26, 700, 12)
+  local npcStatus = npcLabel("Click a name to teleport", 14, 731, 10, C.muted)
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
       {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526, preferHead = true},
       {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 582, pos = {229, 139, 42}},
       {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 610, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
       {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, pos = {3000, 1635, 901}, exactPosition = true, skipNpc = true},
+      {name = "Shells", aliases = {}, y = 694, pos = {-3822, -1280, 500}, exactPosition = true, skipNpc = true},
   }
   -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
   totemMenu.rows = {
@@ -427,14 +430,18 @@
   -- Independent watcher, matching the reference script's ChildAdded-style
   -- behavior. This keeps shaking alive even while the cast loop is changing
   -- states between bite, shake, and reel.
+  local lastShakeX, lastShakeY
+  local lastShakeMoveAt = tick()
   task.spawn(function()
       while alive do
           if enabled and not panelInputCaptured then
               local button = activeShakeButton()
               if button then
+                  local buttonX, buttonY
                   pcall(function()
                       local p, size = button.AbsolutePosition, button.AbsoluteSize
                       local x, y = p.X + size.X / 2, p.Y + size.Y / 2
+                      buttonX, buttonY = x, y
                       moveMouseFast(x, y)
                       pcall(mouse1press)
                       task.wait(0.02)
@@ -444,6 +451,22 @@
                       VirtualInputManager:SendMouseButtonEvent(
                           x, y, 0, false, player, 0)
                   end)
+                  if buttonX then
+                      if not lastShakeX
+                          or math.abs(buttonX - lastShakeX) > 2
+                          or math.abs(buttonY - lastShakeY) > 2 then
+                          lastShakeX, lastShakeY = buttonX, buttonY
+                          lastShakeMoveAt = tick()
+                      elseif tick() - lastShakeMoveAt >= 1 then
+                          -- Re-trigger the UI even when its position has stayed
+                          -- fixed; this helps recover from an occasional missed
+                          -- shake click or stale input state.
+                          moveMouseFast(buttonX + 3, buttonY)
+                          task.wait(0.02)
+                          moveMouseFast(buttonX, buttonY)
+                          lastShakeMoveAt = tick()
+                      end
+                  end
                   task.wait(0.1)
               else
                   task.wait(0.03)
@@ -773,7 +796,7 @@
       -- Tiny slide animation:
       -- NPC expansion pushes the Totems header down smoothly. Totems then
       -- push the Islands header down, and Islands grow the panel bottom.
-      totemMenu.top = 388 + (npcSubOpen and 312 or 95) * npcMenuAnim
+      totemMenu.top = 388 + (npcSubOpen and 368 or 95) * npcMenuAnim
       islandMenu.top = totemMenu.top + 48 + 221 * (totemMenu.open and 1 or 0)
       npcArrow.Text = npcMenuOpen and "^" or "v"
       npcSubArrow.Text = npcSubOpen and "^" or "v"
@@ -1108,7 +1131,7 @@
           and localY >= 311 and localY <= 337 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
           castModeText.Text = castMode .. " cast"
-          castModeText.Color = castMode == "Instant" and C.blue or C.green
+          castModeText.Color = castMode == "Instant" and C.instantOff or C.green
           lastDisplay = ""
       end
       if inside and not dragging and down and not leftWasDown
