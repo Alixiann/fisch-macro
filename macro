@@ -1,6 +1,8 @@
   if _G.StopAutoCast then _G.StopAutoCast() end
   if _G.StopCastHelper then _G.StopCastHelper() end
   if _G.StopFischMacro then _G.StopFischMacro() end
+  if _G.StopFischInstantCatch then _G.StopFischInstantCatch() end
+  if _G.FischCatch then _G.FischCatch.running = false end
 
   local CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
   local INSTANT_HOLD = 0.15 -- Short cast tap; clears Fisch's initial input delay.
@@ -23,6 +25,10 @@
   local world = RS:FindFirstChild("world")
 
   local alive, enabled, shown = true, false, true
+  local instantEnabled, instantLoading = false, false
+  local instantCache, instantOriginal
+  local instantGeneration, nextInstant = 0, 0
+  local toggleInstant
   local held, wasReeling = false, false
   local equipPending = false
   local equipReadyAt = 0
@@ -66,9 +72,11 @@
       cyan = Color3.fromRGB(90, 240, 255),
       red = Color3.fromRGB(255, 153, 165),
       yellow = Color3.fromRGB(255, 226, 147),
+      instantOn = Color3.fromRGB(0, 255, 0),
+      instantOff = Color3.fromRGB(255, 0, 0),
   }
 
-  local PANEL_W, PANEL_H = 278, 302
+  local PANEL_W, PANEL_H = 278, 360
 
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
@@ -130,7 +138,18 @@
   label("P Toggle    ] Hide", 14, 268, 11)
   local castModeText = label("Perfect cast", 145, 268, 11)
   castModeText.Color = C.green
-  label("Click cast mode | Right-drag to move", 14, 285, 9)
+  local instantText = label("L Instant catch OFF", 14, 292, 11)
+  instantText.Color = C.instantOff
+  label("(u have to catch a", 151, 291, 9)
+  label("fish first before", 151, 303, 9)
+  label("enabling)", 151, 315, 9)
+  label("Click toggles | Right-drag to move", 14, 341, 9)
+
+  local function updateInstantLabel()
+      instantText.Text = instantLoading and "L Loading..."
+          or instantEnabled and "L Instant catch ON" or "L Instant catch OFF"
+      instantText.Color = instantEnabled and C.instantOn or C.instantOff
+  end
 
   local lastPanelX, lastPanelY
   local panelX, panelY
@@ -361,6 +380,11 @@
           castModeText.Text = castMode .. " cast"
           castModeText.Color = castMode == "Instant" and C.blue or C.green
           lastDisplay = ""
+      end
+      if inside and not dragging and down and not leftWasDown
+          and x >= lastPanelX + 10 and x <= lastPanelX + 147
+          and y >= lastPanelY + 287 and y <= lastPanelY + 313 then
+          toggleInstant()
       end
       leftWasDown = down
   end
@@ -896,10 +920,75 @@
       fitText(weatherText, environmentText(cachedEvents, now), 12)
   end
 
+  local function disableInstant()
+      instantGeneration = instantGeneration + 1
+      instantEnabled, instantLoading = false, false
+      if instantCache then
+          local ok, err = pcall(applygc, instantCache,
+              "progressefficiency", instantOriginal or 1)
+          if not ok then warn("Instant Catch reset: " .. tostring(err)) end
+      end
+      instantCache, instantOriginal = nil, nil
+      updateInstantLabel()
+  end
+
+  toggleInstant = function()
+      if instantEnabled or instantLoading then
+          disableInstant()
+          return
+      end
+      if type(getgc) ~= "function" or type(applygc) ~= "function" then
+          warn("Instant Catch requires Matcha getgc / applygc")
+          return
+      end
+      instantGeneration = instantGeneration + 1
+      local generation = instantGeneration
+      instantLoading = true
+      updateInstantLabel()
+      task.spawn(function()
+          -- Scan once when enabling, then reuse the cache for updates.
+          local ok, cache = pcall(getgc, {"progressefficiency"})
+          if not alive or generation ~= instantGeneration then return end
+          instantLoading = false
+          if not ok or not cache then
+              updateInstantLabel()
+              warn("Instant Catch: progress cache unavailable")
+              return
+          end
+          local original = cache.progressefficiency
+          if type(original) ~= "number" or original ~= original
+              or math.abs(original) == math.huge then
+              original = 1 -- Default reset value; never gate enabling on this read.
+          end
+          instantCache, instantOriginal = cache, original
+          instantEnabled = true
+          nextInstant = 0
+          updateInstantLabel()
+      end)
+  end
+
+  local function updateInstant(now, focused)
+      if not instantEnabled or not focused or now < nextInstant then return end
+      nextInstant = now + 0.05
+      local currentGui = player:FindFirstChild("PlayerGui")
+      local reel = currentGui and currentGui:FindFirstChild("reel")
+      local character = player.Character
+      local harpoon = character and (character:GetAttribute("HarpoonMinigameActive")
+          or character:GetAttribute("HarpoonMinigame"))
+      if reel and not harpoon then
+          local ok, err = pcall(applygc, instantCache, "progressefficiency", 500)
+          if not ok then
+              disableInstant()
+              warn("Instant Catch stopped: " .. tostring(err))
+          end
+      end
+  end
+
   local function stop()
       if not alive then return end
 
       alive, enabled = false, false
+      disableInstant()
       equipPending = false
       dragging = false
       releasePanelInput()
@@ -1068,6 +1157,7 @@
 
   previous[0x50] = iskeypressed(0x50) == true
   previous[0xDD] = iskeypressed(0xDD) == true
+  previous[0x4C] = iskeypressed(0x4C) == true
 
   -- Force the GUI into its intended initial visible state.
   shown = true
@@ -1080,6 +1170,7 @@
           while alive do
               local now = tick()
               local toggle = edge(0x50) -- P
+              local instantToggle = edge(0x4C) -- L
               local hide = edge(0xDD) -- ]
               local focused = isrbxactive()
 
@@ -1094,6 +1185,8 @@
                   if hide then
                       shown = not shown
                   end
+
+                  if instantToggle then toggleInstant() end
 
                   if toggle then
                       updateSession(now)
@@ -1123,6 +1216,7 @@
               end
 
               updatePanelInput(focused)
+              updateInstant(now, focused)
 
               if not enabled or not focused or panelInputCaptured then
                   mouse(false)
