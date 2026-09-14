@@ -19,6 +19,8 @@
   local RS = game:GetService("ReplicatedStorage")
   local Lighting = game:GetService("Lighting")
   local W = game:GetService("Workspace")
+  local GuiService = game:GetService("GuiService")
+  local VirtualInputManager = game:GetService("VirtualInputManager")
 
   local player = Players.LocalPlayer
   local gui = player:FindFirstChild("PlayerGui")
@@ -40,6 +42,7 @@
 
   local pendingKey, keyReleaseAt
   local nextEnter = 0
+  local nextShakeInput = 0
   local nextCast, releaseAt = 0, nil
   local castMeter, castFill, castGreen
   local idleSince
@@ -76,7 +79,10 @@
       instantOff = Color3.fromRGB(255, 0, 0),
   }
 
-  local PANEL_W, PANEL_H = 278, 360
+  local PANEL_W, PANEL_H = 278, 420
+  local npcMenuOpen = false
+  local npcMenuDrawings = {}
+  local totemMenu = {open = false, page = 1, pageSize = 6, top = 388, drawings = {}, slots = {}}
 
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
@@ -144,6 +150,87 @@
   label("fish first before", 151, 303, 9)
   label("enabling)", 151, 315, 9)
   label("Click toggles | Right-drag to move", 14, 341, 9)
+
+  -- NPC menu: world names are resolved at click time; no purchases are sent.
+  local npcToggleText = label("NPC teleports", 14, 365, 12)
+  npcToggleText.Color = C.cyan
+  local npcArrow = label("v", 251, 363, 16)
+  local function npcLabel(text, x, y, size, color)
+      local d = label(text, x, y, size)
+      d.Color = color or C.white
+      npcMenuDrawings[d] = true
+      d.Visible = false
+      return d
+  end
+  npcLabel("BUFFERS", 14, 397, 11, C.cyan)
+  npcLabel("Merlin", 26, 421, 12)
+  npcLabel("Astronomer Vega", 26, 449, 12)
+  npcLabel("SHOPS", 14, 481, 11, C.cyan)
+  npcLabel("Daily Shopkeeper", 26, 505, 12)
+  npcLabel("Rare Goods Dealer", 26, 533, 12)
+  npcLabel("Elder Kaito", 26, 561, 12)
+  local npcStatus = npcLabel("Click a name to teleport", 14, 592, 10, C.muted)
+  local npcRows = {
+      {name = "Merlin", aliases = {"merlin"}, y = 415, pos = {-943, 224, -988}},
+      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 443},
+      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 499, pos = {229, 139, 42}},
+      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 527},
+      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 555},
+  }
+  -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
+  -- Coordinates: fischepedia.com/wiki/<totem-name>/ and bloxodes.com/wiki/fisch/totems
+  totemMenu.rows = {
+      {name = "Clearcast", pos = {701, 250, 305}},
+      {name = "Tempest", pos = {36, 135, 1946}},
+      {name = "Windset", pos = {2851, 178, 2703}},
+      {name = "Smokescreen", pos = {2791, 139, -629}},
+      {name = "Meteor (Roslit)", match = "Meteor", pos = {-1944, 276, 231}},
+      {name = "Eclipse", pos = {5967, 274, 839}},
+      {name = "Avalanche", pos = {19708, 467, 6058}},
+      {name = "Blizzard", pos = {20147, 743, 5805}},
+      {name = "Blue Moon", pos = {2715, 140, 2480}},
+      {name = "Zeus Storm", pos = {-4326, -627, 2687}},
+      {name = "Dripstone Collapse", pos = {-3158, -1105, 788}},
+  }
+  totemMenu.title = label("Totems", 14, 396, 12)
+  totemMenu.title.Color = C.cyan
+  totemMenu.arrow = label("v", 251, 394, 16)
+  local function totemLabel(text, x, offset, size, color)
+      local d = label(text, x, totemMenu.top + offset, size)
+      d.Color = color or C.white
+      totemMenu.drawings[d] = offset
+      d.Visible = false
+      return d
+  end
+  for i = 1, totemMenu.pageSize do
+      totemMenu.slots[i] = totemLabel("", 26, 38 + (i - 1) * 27, 12)
+  end
+  totemMenu.prev = totemLabel("< Prev", 14, 204, 11, C.cyan)
+  totemMenu.pageLabel = totemLabel("1 / 3", 113, 204, 11, C.muted)
+  totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
+  totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
+
+  local function npcName(value)
+      return tostring(value):lower():gsub("[^%w]", "")
+  end
+  local function findNpcPosition(row)
+      for _, object in ipairs(W:GetDescendants()) do
+          local match = false
+          local name = npcName(object.Name)
+          for _, alias in ipairs(row.aliases) do
+              if name == alias then match = true; break end
+          end
+          if match then
+              local model = object
+              if model.ClassName ~= "Model" then model = object.Parent end
+              if model and model.ClassName == "Model" then
+                  local part = model:FindFirstChild("HumanoidRootPart")
+                      or model:FindFirstChild("Head") or model.PrimaryPart
+                  if part then return part.Position end
+              end
+          end
+      end
+  end
 
   local function updateInstantLabel()
       instantText.Text = instantLoading and "L Loading..."
@@ -228,6 +315,8 @@
       for _, entry in ipairs(layout) do
           entry.d.Transparency = entry.opacity * fadeAmount
           entry.d.Visible = fadeAmount > 0.001
+              and (not npcMenuDrawings[entry.d] or npcMenuOpen)
+              and (not totemMenu.drawings[entry.d] or totemMenu.open)
       end
   end
 
@@ -265,6 +354,7 @@
           castMeter, castFill, castGreen = nil, nil, nil
       end
   end
+
 
   local function castReading()
       if not castMeter then
@@ -349,6 +439,108 @@
       activity = 0
   end
 
+  local function teleportNpc(row)
+      -- Stop casting before moving, including any held synthetic inputs.
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then npcStatus.Text = "Waiting for your character"; return end
+      local ok, pos = pcall(findNpcPosition, row)
+      if not ok then pos = nil end
+      local live = pos ~= nil
+      if not pos and row.pos then
+          pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      end
+      if not pos then
+          npcStatus.Text = row.name .. ": not loaded"
+          return
+      end
+      local moved, err = pcall(function()
+          root.CFrame = CFrame.new(pos.X, pos.Y + 2, pos.Z + 4)
+      end)
+      if not moved then
+          npcStatus.Text = "Teleport write failed"
+          warn("NPC teleport: " .. tostring(err))
+          return
+      end
+      npcStatus.Text = row.name .. (live and ": moved" or ": map location")
+  end
+
+  local function layoutTeleportMenus()
+      totemMenu.top = npcMenuOpen and 617 or 388
+      npcArrow.Text = npcMenuOpen and "^" or "v"
+      totemMenu.arrow.Text = totemMenu.open and "^" or "v"
+      PANEL_H = totemMenu.top + (totemMenu.open and 253 or 32)
+      bg.Size = Vector2.new(PANEL_W, PANEL_H)
+      for _, entry in ipairs(layout) do
+          if entry.d == totemMenu.title then entry.y = totemMenu.top + 8
+          elseif entry.d == totemMenu.arrow then entry.y = totemMenu.top + 6
+          elseif totemMenu.drawings[entry.d] then
+              entry.y = totemMenu.top + totemMenu.drawings[entry.d]
+          end
+      end
+      for i, d in ipairs(totemMenu.slots) do
+          local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + i]
+          d.Text = row and row.name or ""
+      end
+      totemMenu.pageLabel.Text = totemMenu.page .. " / " .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
+      panelX, panelY = lastPanelX, lastPanelY
+      lastPanelX, lastPanelY = nil, nil
+      positionPanel()
+      updateFade(tick())
+  end
+
+  local function teleportTotem(row)
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then totemMenu.status.Text = "Waiting for your character"; return end
+      local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local live = false
+      -- Prefer a matching shop display near this location, ignoring held Tools.
+      pcall(function()
+          local targetName = npcName(row.match or row.name) .. "totem"
+          for _, object in ipairs(W:GetDescendants()) do
+              if npcName(object.Name) == targetName then
+                  local node, heldTool = object, false
+                  while node and node ~= W do
+                      if node.ClassName == "Tool" then heldTool = true; break end
+                      node = node.Parent
+                  end
+                  if not heldTool then
+                      local part
+                      if object:IsA("BasePart") then part = object
+                      elseif object.ClassName == "Model" then
+                          part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+                      end
+                      if part and (part.Position - pos).Magnitude < 200 then
+                          pos, live = part.Position, true
+                          break
+                      end
+                  end
+              end
+          end
+      end)
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z + 3)
+      end)
+      totemMenu.status.Text = ok and (live and "At shop display; buy manually" or "At mapped shop; buy manually")
+          or "Teleport write failed"
+      if not ok then warn("Totem teleport: " .. tostring(err)) end
+  end
+
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
       local inside = focused and shown and lastPanelX and lastPanelY
@@ -385,6 +577,37 @@
           and x >= lastPanelX + 10 and x <= lastPanelX + 147
           and y >= lastPanelY + 287 and y <= lastPanelY + 313 then
           toggleInstant()
+      end
+      if inside and not dragging and down and not leftWasDown then
+          local localY = y - lastPanelY
+          if localY >= 357 and localY <= 387 then
+              npcMenuOpen = not npcMenuOpen
+              if npcMenuOpen then totemMenu.open = false end
+              layoutTeleportMenus()
+          elseif localY >= totemMenu.top and localY < totemMenu.top + 32 then
+              totemMenu.open = not totemMenu.open
+              if totemMenu.open then npcMenuOpen = false end
+              layoutTeleportMenus()
+          elseif totemMenu.open then
+              local offset = localY - totemMenu.top
+              if offset >= 198 and offset < 224 then
+                  local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
+                  if x < lastPanelX + 95 then totemMenu.page = math.max(1, totemMenu.page - 1)
+                  elseif x > lastPanelX + 190 then totemMenu.page = math.min(pages, totemMenu.page + 1) end
+                  layoutTeleportMenus()
+              elseif offset >= 32 and offset < 32 + totemMenu.pageSize * 27 then
+                  local slot = math.floor((offset - 32) / 27) + 1
+                  local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + slot]
+                  if row then teleportTotem(row) end
+              end
+          elseif npcMenuOpen and x >= lastPanelX + 12 and x <= lastPanelX + PANEL_W - 12 then
+              for _, row in ipairs(npcRows) do
+                  if localY >= row.y and localY < row.y + 27 then
+                      teleportNpc(row)
+                      break
+                  end
+              end
+          end
       end
       leftWasDown = down
   end
@@ -1241,6 +1464,9 @@
                   local shake = gui and gui:FindFirstChild("shakeui")
                   local safe = shake and shake:FindFirstChild("safezone")
                   local button = safe and safe:FindFirstChild("button")
+                  -- shakeui can remain mounted while inactive; only treat a
+                  -- visible button as the in-between shake step.
+                  local shakeActive = button and button.Visible == true
 
                   -- Recheck after navigation settles in case the rod was
                   -- equipped manually while the initial equip was pending.
@@ -1301,29 +1527,27 @@
                           display("WAITING FOR REEL")
                       end
 
-                  elseif button then
+                  elseif shakeActive then
                       mouse(false)
                       releaseAt, idleSince = nil, nil
                       recoveryStage = 0
                       wasReeling = false
                       resetTracking()
-
-                      if not navigationOn then
-                          setNavigation(true)
-                          nextEnter = now + 0.20
-                      else
-                          navigationWanted = true
+                      if navigationOn or navigationWanted then
+                          releaseKey()
+                          setNavigation(false)
                       end
-
-                      if navigationOn
-                          and not navigationReleaseAt
-                          and now >= navigationReadyAt
-                          and now >= nextEnter
-                          and not pendingKey then
-
-                          if tap(0x0D, now) then -- Enter
-                              nextEnter = now + ENTER_INTERVAL
-                          end
+                      -- Match the linked auto-shake implementation: focus the
+                      -- button through Roblox UI navigation, then send Return.
+                      if now >= nextShakeInput then
+                          pcall(function()
+                              GuiService.SelectedObject = button
+                              if GuiService.SelectedObject == button then
+                                  VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.Return, false, game)
+                                  VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Return, false, game)
+                              end
+                          end)
+                          nextShakeInput = now + 0.10
                       end
 
                       display("SHAKING")
@@ -1371,9 +1595,6 @@
                               end
                           end
 
-                      elseif shake then
-                          mouse(false)
-                          releaseAt = nil
                       elseif releaseAt then
                           local percent, inGreen = castReading()
                           if castMode == "Instant" and now - releaseAt >= INSTANT_HOLD then
