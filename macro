@@ -1,0 +1,1334 @@
+  if _G.StopAutoCast then _G.StopAutoCast() end
+  if _G.StopCastHelper then _G.StopCastHelper() end
+  if _G.StopFischMacro then _G.StopFischMacro() end
+
+  local CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
+  local INSTANT_HOLD = 0.15 -- Short cast tap; clears Fisch's initial input delay.
+  local castMode = "Perfect"
+  local RETRY = 2
+  local FAILSAFE = 20
+  local ENTER_INTERVAL = 0.10
+  local KEY_HOLD = 0.06
+  local FADE_SECONDS = 0.22
+  local ENVIRONMENT_INTERVAL = 2
+  local EVENT_SCROLL_SECONDS = 4
+
+  local Players = game:GetService("Players")
+  local RS = game:GetService("ReplicatedStorage")
+  local Lighting = game:GetService("Lighting")
+  local W = game:GetService("Workspace")
+
+  local player = Players.LocalPlayer
+  local gui = player:FindFirstChild("PlayerGui")
+  local world = RS:FindFirstChild("world")
+
+  local alive, enabled, shown = true, false, true
+  local held, wasReeling = false, false
+  local equipPending = false
+  local equipReadyAt = 0
+
+  local navigationOn = false
+  local navigationReleaseAt
+  local navigationReadyAt = 0
+  local navigationWanted = false
+
+  local pendingKey, keyReleaseAt
+  local nextEnter = 0
+  local nextCast, releaseAt = 0, nil
+  local castMeter, castFill, castGreen
+  local idleSince
+  local recoveryStage, recoveryAt = 0, 0
+  local previous, drawings, layout = {}, {}, {}
+
+  local lastFish, lastBar, lastTime
+  local fishVelocity, barVelocity = 0, 0
+  local fishMoving, quietTime = false, 0
+  local activity = 0
+
+  local started, elapsed = 0, 0
+  local catchBase, sessionCaught
+  local nextStats = 0
+  local fadeAmount = 1
+  local fadeLastTime = tick()
+  local lastDisplay = ""
+
+  local cachedEvents, cachedDescriptions = {}, {}
+  local nextEnvironment = 0
+
+  local C = {
+      bg = Color3.fromRGB(55, 65, 83),
+      line = Color3.fromRGB(143, 162, 187),
+      white = Color3.fromRGB(255, 255, 255),
+      muted = Color3.fromRGB(224, 233, 246),
+      green = Color3.fromRGB(130, 255, 189),
+      blue = Color3.fromRGB(153, 215, 255),
+      pink = Color3.fromRGB(255, 125, 205),
+      cyan = Color3.fromRGB(90, 240, 255),
+      red = Color3.fromRGB(255, 153, 165),
+      yellow = Color3.fromRGB(255, 226, 147),
+  }
+
+  local PANEL_W, PANEL_H = 278, 302
+
+  local function add(kind, x, y, baseOpacity)
+      local d = Drawing.new(kind)
+      d.Visible = true
+      d.ZIndex = #drawings + 1
+
+      local opacity = baseOpacity
+      if opacity == nil then opacity = 1 end
+
+      d.Transparency = opacity
+
+      drawings[#drawings + 1] = d
+      layout[#layout + 1] = {
+          d = d,
+          x = x,
+          y = y,
+          opacity = opacity,
+      }
+
+      return d
+  end
+
+  local bg = add("Square", 0, 0, 0.92)
+  bg.Size = Vector2.new(PANEL_W, PANEL_H)
+  bg.Color = C.bg
+  bg.Filled = true
+
+  local accent = add("Square", 0, 0)
+  accent.Size = Vector2.new(PANEL_W, 2)
+  accent.Color = C.red
+  accent.Filled = true
+
+  local function label(value, x, y, size)
+      local d = add("Text", x, y)
+      d.Text = value
+      d.Size = size
+      d.Font = 7 -- Matcha Pixel font.
+      d.Outline = false
+      d.Color = Color3.fromRGB(255, 255, 255)
+      return d
+  end
+
+  local titleText = label("Fisch Macro", 14, 13, 20)
+  titleText.Color = C.pink
+
+  local statusText = label("OFF", 14, 42, 12)
+  local fishText = label("Caught    --", 14, 69, 14)
+  local timerText = label("Runtime   00:00:00", 14, 91, 14)
+  local clockText = label("Server    --", 14, 113, 14)
+  local eventHeading = label("WEATHER / EVENTS", 14, 139, 10)
+  eventHeading.Color = C.cyan
+  local weatherText = label("--", 14, 156, 12)
+
+  local divider = add("Square", 14, 258)
+  divider.Size = Vector2.new(PANEL_W - 28, 1)
+  divider.Color = C.line
+  divider.Filled = true
+
+  label("P Toggle    ] Hide", 14, 268, 11)
+  local castModeText = label("Perfect cast", 145, 268, 11)
+  castModeText.Color = C.green
+  label("Click cast mode | Right-drag to move", 14, 285, 9)
+
+  local lastPanelX, lastPanelY
+  local panelX, panelY
+  local dragging, rightWasDown = false, false
+  local dragOffsetX, dragOffsetY = 0, 0
+  local cursor = player:GetMouse()
+  local panelInputCaptured = false
+  local leftWasDown = false
+
+  local function releasePanelInput()
+      if panelInputCaptured then
+          setrobloxinput(true)
+          panelInputCaptured = false
+      end
+  end
+
+  local function positionPanel()
+      local camera = W:FindFirstChildOfClass("Camera")
+      local viewport = camera and camera.ViewportSize
+
+      local x = panelX or (viewport
+          and math.max(8, viewport.X - PANEL_W - 18) or 900
+      )
+      local y = panelY or (viewport
+          and math.max(8, (viewport.Y - PANEL_H) / 2) or 260
+      )
+
+      if viewport then
+          x = math.clamp(x, 0, math.max(0, viewport.X - PANEL_W))
+          y = math.clamp(y, 0, math.max(0, viewport.Y - PANEL_H))
+      end
+
+      if x == lastPanelX and y == lastPanelY then return end
+      lastPanelX, lastPanelY = x, y
+
+      for _, entry in ipairs(layout) do
+          entry.d.Position = Vector2.new(x + entry.x, y + entry.y)
+      end
+  end
+
+  local function updateDrag(focused)
+      local value = ismouse2pressed()
+      local down = value == true or (type(value) == "number" and value ~= 0)
+      local x, y = cursor.X, cursor.Y
+      if not focused or not shown or type(x) ~= "number" or type(y) ~= "number" then
+          dragging = false
+      elseif down then
+          if not rightWasDown and lastPanelX and lastPanelY
+              and x >= lastPanelX and x <= lastPanelX + PANEL_W
+              and y >= lastPanelY and y <= lastPanelY + PANEL_H then
+              dragging = true
+              dragOffsetX, dragOffsetY = x - lastPanelX, y - lastPanelY
+          end
+          if dragging then
+              panelX, panelY = x - dragOffsetX, y - dragOffsetY
+              positionPanel()
+          end
+      else
+          dragging = false
+      end
+      rightWasDown = down
+  end
+
+  local function updateFade(now)
+      local dt = math.max(0, now - fadeLastTime)
+      fadeLastTime = now
+
+      local target = shown and 1 or 0
+
+      if fadeAmount < target then
+          fadeAmount = math.min(target, fadeAmount + dt / FADE_SECONDS)
+      elseif fadeAmount > target then
+          fadeAmount = math.max(target, fadeAmount - dt / FADE_SECONDS)
+      end
+
+      for _, entry in ipairs(layout) do
+          entry.d.Transparency = entry.opacity * fadeAmount
+          entry.d.Visible = fadeAmount > 0.001
+      end
+  end
+
+  local function display(message)
+      local key = tostring(enabled) .. castMode .. message
+      if lastDisplay == key then return end
+      lastDisplay = key
+
+      local color = C.green
+
+      if not enabled then
+          color = C.red
+      elseif message == "PREDICTING" then
+          color = C.blue
+      elseif message:find("CAST", 1, true) then
+          color = castMode == "Instant" and C.blue or C.green
+      elseif message == "EQUIPPING ROD" then
+          color = C.yellow
+      end
+
+      statusText.Text = message
+      statusText.Color = Color3.fromRGB(255, 255, 255)
+      accent.Color = color
+  end
+
+  local function mouse(value)
+      if held == value then return end
+      held = value
+
+      if value then
+          mouse1press()
+      else
+          mouse1release()
+          releaseAt = nil
+          castMeter, castFill, castGreen = nil, nil, nil
+      end
+  end
+
+  local function castReading()
+      if not castMeter then
+          local character = player.Character
+          local root = character and character:FindFirstChild("HumanoidRootPart")
+          local power = root and root:FindFirstChild("power")
+          castMeter = power and power:FindFirstChild("powerbar")
+          castFill = castMeter and castMeter:FindFirstChild("bar")
+          castGreen = castMeter and castMeter:FindFirstChild("green")
+      end
+      if not (castMeter and castFill and castGreen) then return nil end
+      local size, origin = castMeter.AbsoluteSize, castMeter.AbsolutePosition
+      local fillSize = castFill.AbsoluteSize
+      local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
+      if not (size and origin and fillSize and greenSize and greenPos)
+          or size.Y <= 0 or greenSize.Y <= 0 then return nil end
+
+      -- Fisch fills this vertical meter upwards. Read the actual green frame.
+      local amount = math.clamp(fillSize.Y / size.Y, 0, 1)
+      local lower = math.clamp(1 - (greenPos.Y + greenSize.Y - origin.Y) / size.Y, 0, 1)
+      local upper = math.clamp(1 - (greenPos.Y - origin.Y) / size.Y, 0, 1)
+      if upper <= lower then return nil end
+      local target = lower + (upper - lower) * 0.75
+      return amount * 100, amount >= target and amount <= upper
+  end
+
+  local function releaseKey()
+      if pendingKey then
+          keyrelease(pendingKey)
+          pendingKey = nil
+          keyReleaseAt = nil
+      end
+  end
+
+  local function tap(key, now)
+      if pendingKey or navigationReleaseAt
+          or now < navigationReadyAt then
+          return false
+      end
+
+      pendingKey = key
+      keyReleaseAt = now + KEY_HOLD
+      keypress(key)
+      return true
+  end
+
+  local function setNavigation(value)
+      navigationWanted = value
+
+      if navigationOn == value or navigationReleaseAt then
+          return
+      end
+
+      releaseKey()
+      keypress(0xDC)
+
+      navigationOn = value
+      navigationReleaseAt = tick() + KEY_HOLD
+      navigationReadyAt = navigationReleaseAt + 0.12
+  end
+
+  local function updateKeys(now)
+      if pendingKey and now >= keyReleaseAt then
+          releaseKey()
+      end
+
+      if navigationReleaseAt and now >= navigationReleaseAt then
+          keyrelease(0xDC)
+          navigationReleaseAt = nil
+      end
+
+      if not navigationReleaseAt
+          and navigationWanted ~= navigationOn then
+          setNavigation(navigationWanted)
+      end
+  end
+
+  local function resetTracking()
+      lastFish, lastBar, lastTime = nil, nil, nil
+      fishVelocity, barVelocity = 0, 0
+      fishMoving, quietTime = false, 0
+      activity = 0
+  end
+
+  local function updatePanelInput(focused)
+      local x, y = cursor.X, cursor.Y
+      local inside = focused and shown and lastPanelX and lastPanelY
+          and type(x) == "number" and type(y) == "number"
+          and x >= lastPanelX and x <= lastPanelX + PANEL_W
+          and y >= lastPanelY and y <= lastPanelY + PANEL_H
+      local capture = focused and shown and (inside or dragging)
+      if capture and not panelInputCaptured then
+          -- Release synthetic inputs before blocking game input.
+          mouse(false)
+          releaseKey()
+          if navigationReleaseAt then
+              keyrelease(0xDC)
+              navigationReleaseAt = nil
+          end
+          navigationWanted = navigationOn
+          setrobloxinput(false)
+          panelInputCaptured = true
+      elseif not capture then
+          releasePanelInput()
+      end
+
+      local value = ismouse1pressed()
+      local down = value == true or (type(value) == "number" and value ~= 0)
+      if inside and not dragging and down and not leftWasDown
+          and x >= lastPanelX + 139 and x <= lastPanelX + PANEL_W - 8
+          and y >= lastPanelY + 263 and y <= lastPanelY + 283 then
+          castMode = castMode == "Perfect" and "Instant" or "Perfect"
+          castModeText.Text = castMode .. " cast"
+          castModeText.Color = castMode == "Instant" and C.blue or C.green
+          lastDisplay = ""
+      end
+      leftWasDown = down
+  end
+
+  local function numberValue(parent, name)
+      local child = parent and parent:FindFirstChild(name)
+      if not child then return nil end
+
+      local class = child.ClassName
+      if class ~= "NumberValue" and class ~= "IntValue" then
+          return nil
+      end
+
+      local value = child.Value
+
+      if type(value) == "number"
+          and value == value
+          and math.abs(value) < math.huge then
+          return value
+      end
+
+      return nil
+  end
+
+  local function equippedRod()
+      local character = player.Character
+      if not character then return nil end
+
+      -- Equipped tools live in Character; backpack rods are not equipped.
+      for _, tool in ipairs(character:GetChildren()) do
+          if tool.ClassName == "Tool" then
+              local events = tool:FindFirstChild("events")
+              local cast = events and events:FindFirstChild("castAsync")
+              if cast and cast.ClassName == "RemoteFunction" then
+                  return tool
+              end
+          end
+      end
+
+      return nil
+  end
+
+  local function catches()
+      local stats = W:FindFirstChild("PlayerStats")
+      local mine = stats and stats:FindFirstChild(player.Name)
+      local t = mine and mine:FindFirstChild("T")
+      local record = t and t:FindFirstChild(player.Name)
+      local values = record and record:FindFirstChild("Stats")
+
+      return numberValue(values, "tracker_fishcaught")
+  end
+
+  local function updateSession(now)
+      if not enabled then return end
+
+      elapsed = now - started
+      local current = catches()
+
+      if current then
+          if not catchBase then catchBase = current end
+          sessionCaught = math.max(0, current - catchBase)
+      end
+  end
+
+  local function mult(value)
+      return value and string.format("%gx", value) or "?"
+  end
+
+  local function serverClock()
+      local minutes = Lighting:GetAttribute("CurrentTime")
+      if type(minutes) ~= "number" then return "?" end
+
+      minutes = minutes % 1440
+      local hour = math.floor(minutes / 60)
+      local minute = math.floor(minutes % 60)
+      local suffix = hour >= 12 and "PM" or "AM"
+      local displayHour = hour % 12
+
+      if displayHour == 0 then displayHour = 12 end
+
+      return string.format("%d:%02d %s", displayHour, minute, suffix)
+  end
+
+  local function cleanText(value)
+      if type(value) ~= "string" then return nil end
+
+      value = value:gsub("<[bB][rR]%s*/?>", "\n")
+      value = value:gsub("<[^>]*>", "")
+      value = value:gsub("&times;", "x")
+      value = value:gsub("×", "x")
+      value = value:gsub("&nbsp;", " ")
+      value = value:gsub("&amp;", "&")
+      value = value:gsub("\r", "")
+      value = value:match("^%s*(.-)%s*$")
+
+      local lower = value:lower()
+
+      if value == ""
+          or lower == "none"
+          or lower == "nil"
+          or lower == "false"
+          or lower == "weather status"
+          or lower == "failed to fetch text" then
+          return nil
+      end
+
+      if value:find("[%z\1-\8\11\12\14-\31]")
+          or value:find("�", 1, true) then
+          return nil
+      end
+
+      return value
+  end
+
+  local function normalized(value)
+      return (cleanText(value) or ""):lower()
+  end
+
+  local function readEnvironment()
+      gui = player:FindFirstChild("PlayerGui")
+      world = RS:FindFirstChild("world")
+
+      local events, descriptions = {}, {}
+      local seenEvents, seenDescriptions = {}, {}
+
+      local function describe(value)
+          value = cleanText(value)
+          if not value then return end
+
+          local key = value:lower()
+
+          if not seenDescriptions[key] then
+              seenDescriptions[key] = true
+              descriptions[#descriptions + 1] = value
+          end
+      end
+
+      local function include(value)
+          value = cleanText(value)
+          if not value then return end
+
+          describe(value)
+
+          local title = value:match("[^\n]+") or value
+          local key = title:lower():gsub("%s+", " ")
+          local index = seenEvents[key]
+
+          if not index then
+              events[#events + 1] = value
+              seenEvents[key] = #events
+          elseif #value > #events[index] then
+              events[index] = value
+          end
+      end
+
+      local hud = gui and gui:FindFirstChild("hud")
+      local safe = hud and hud:FindFirstChild("safezone")
+      local statuses = safe and safe:FindFirstChild("worldstatuses")
+
+      if statuses then
+          for _, entry in ipairs(statuses:GetChildren()) do
+              local name = entry.Name:lower()
+              local readable = false
+
+              if not name:find("cycle", 1, true)
+                  and not name:find("season", 1, true) then
+                  for _, item in ipairs(entry:GetDescendants()) do
+                      if item.ClassName == "TextLabel"
+                          and item.Name:lower():find("tooltip", 1, true) then
+                          -- Text is only refreshed when the badge is hovered.
+                          -- CurrentText is updated by Fisch's WorldStatus UI.
+                          local current = item:GetAttribute("CurrentText")
+                          local text = cleanText(current) or cleanText(item.Text)
+                          if text then
+                              include(text)
+                              readable = true
+                          end
+                      end
+                  end
+                  if not readable and entry.ClassName == "Frame" then
+                      -- A live badge with unreadable text is not "no event".
+                      if name:match("^event%d+$") then
+                          include("Server event (name unavailable)")
+                      elseif name:match("^adminevent%d+$") then
+                          include("Admin event (name unavailable)")
+                      elseif name:match("^localizedevent%d+$") then
+                          include("Local event (name unavailable)")
+                      end
+                  end
+              end
+          end
+      end
+
+      local function includeName(value)
+          value = cleanText(value)
+          if not value then return end
+
+          include(value)
+      end
+
+      -- Read all replicated groups, including groups added by limited updates.
+      -- These are small state containers, not a scan of the game/map.
+      for _, name in ipairs({
+          "weather", "clientWeather", "event", "admin_event", "AdminEventText"
+      }) do
+          local slot = world and world:FindFirstChild(name)
+          if slot then
+              if slot.ClassName == "StringValue" then
+                  includeName(slot.Value)
+              end
+              for _, group in ipairs(slot:GetDescendants()) do
+                  if group.ClassName == "StringValue" then
+                      includeName(group.Value)
+                  end
+              end
+          end
+      end
+
+      -- Matcha can return blank weather strings/tooltip attributes. Fisch's
+      -- live aurora effect provides a separate signal in that case.
+      local active = W:FindFirstChild("active")
+      local constant = active and active:FindFirstChild("constant")
+      local aurora = constant and constant:FindFirstChild("Aurora Borealis")
+      if aurora and aurora.ClassName == "Model" then
+          local effect = aurora:FindFirstChild("Aurora Borealis")
+          local beam = effect and effect:FindFirstChild("beam")
+          if beam and beam.ClassName == "Beam" then
+              includeName("Aurora Borealis")
+          end
+      end
+
+      -- Independent world events can run alongside the weather groups.
+      for _, entry in ipairs({
+          {"meteor_active", "Meteor"},
+          {"blizzard_active", "Blizzard"},
+      }) do
+          local flag = world and world:FindFirstChild(entry[1])
+          if flag and flag.ClassName == "BoolValue" and flag.Value == true then
+              includeName(entry[2])
+          end
+      end
+
+      local boostsGui = gui and gui:FindFirstChild("CurrentServerBoosts")
+      local boosts = boostsGui and boostsGui:FindFirstChild("boosts")
+
+      if boosts then
+          for _, entry in ipairs(boosts:GetChildren()) do
+              local title = entry:FindFirstChild("Title")
+              local amount = entry:FindFirstChild("length")
+
+              local titleValue = title
+                  and title.ClassName == "TextLabel"
+                  and cleanText(title.Text)
+
+              local amountValue = amount
+                  and amount.ClassName == "TextLabel"
+                  and cleanText(amount.Text)
+
+              if titleValue and amountValue then
+                  describe(titleValue .. " " .. amountValue)
+              end
+
+              for _, item in ipairs(entry:GetDescendants()) do
+                  if item.ClassName == "TextLabel" then
+                      local value = cleanText(item.Text)
+
+                      if value then
+                          local lower = value:lower()
+
+                          if lower:find("luck", 1, true)
+                              or lower:find("shiny", 1, true)
+                              or lower:find("sparkling", 1, true)
+                              or lower:find("mutation", 1, true) then
+                              describe(value)
+                          end
+                      end
+                  end
+              end
+          end
+      end
+
+      local function priority(value)
+          local n = value:lower()
+
+          if n:find("admin", 1, true)
+              or n:find("aurora", 1, true)
+              or n:find("tropical", 1, true)
+              or n:find("rainbow", 1, true) then
+              return 1
+          end
+
+          if n:find("shiny", 1, true)
+              or n:find("sparkling", 1, true)
+              or n:find("mutation", 1, true) then
+              return 2
+          end
+
+          return 3
+      end
+
+      table.sort(events, function(a, b)
+          local pa, pb = priority(a), priority(b)
+          if pa == pb then return a < b end
+          return pa < pb
+      end)
+
+      return events, descriptions
+  end
+
+  local function advertisedPercent(descriptions, stat)
+      local values, seen = {}, {}
+
+      for _, description in ipairs(descriptions) do
+          for line in normalized(description):gmatch("[^\n]+") do
+              local patterns = {
+                  stat .. "%s+chance%s*[:=]?%s*([+%-]?%d+%.?%d*)%s*%%",
+                  "([+%-]?%d+%.?%d*)%s*%%%s+" .. stat .. "%s+chance",
+                  stat .. "%s*[:=]%s*([+%-]?%d+%.?%d*)%s*%%",
+              }
+
+              for _, pattern in ipairs(patterns) do
+                  local raw = line:match(pattern)
+                  local value = raw and tonumber(raw)
+
+                  if value and math.abs(value) <= 100 then
+                      local sign = raw:sub(1, 1) == "+" and "+" or ""
+                      local text = sign .. string.format("%g%%", value)
+
+                      if not seen[text] then
+                          seen[text] = true
+                          values[#values + 1] = text
+                      end
+                  end
+              end
+          end
+      end
+
+      return #values > 0 and table.concat(values, "/") or nil
+  end
+
+  local function advertisedLuck(descriptions, scope)
+      local found
+
+      for _, description in ipairs(descriptions) do
+          local text = normalized(description)
+          local raw =
+              text:match(scope .. "%s+luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
+              or text:match(scope .. "%s+luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
+              or text:match("(%d+%.?%d*)%s*x%s+" .. scope .. "%s+luck")
+
+          local value = raw and tonumber(raw)
+
+          if value and value > 0 then
+              if found and found ~= value then
+                  return nil, true
+              end
+              found = value
+          end
+      end
+
+      return found, false
+  end
+
+  local function eventLuck(events)
+      local values, seen = {}, {}
+
+      for _, description in ipairs(events) do
+          local text = normalized(description)
+
+          if not text:find("server", 1, true)
+              and not text:find("global", 1, true) then
+              local raw =
+                  text:match("(%d+%.?%d*)%s*x%s+luck")
+                  or text:match("luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
+                  or text:match("luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
+
+              local value = raw and tonumber(raw)
+
+              if value and value > 0 then
+                  local textValue = string.format("%gx", value)
+
+                  if not seen[textValue] then
+                      seen[textValue] = true
+                      values[#values + 1] = textValue
+                  end
+              end
+          end
+      end
+
+      return #values > 0 and table.concat(values, "/") or nil
+  end
+
+  local function advertisedEffectMultipliers(descriptions, stat)
+      local values, seen = {}, {}
+
+      for _, description in ipairs(descriptions) do
+          for line in normalized(description):gmatch("[^\n]+") do
+              local patterns = {
+                  "(%d+%.?%d*)%s*x%s+" .. stat,
+                  "x%s*(%d+%.?%d*)%s+" .. stat,
+                  stat .. "%s+chance%s*[:=]?%s*x%s*(%d+%.?%d*)",
+                  stat .. "%s+chance%s*[:=]?%s*(%d+%.?%d*)%s*x",
+                  stat .. "%s*[:=]%s*x%s*(%d+%.?%d*)",
+                  stat .. "%s*[:=]%s*(%d+%.?%d*)%s*x",
+              }
+
+              for _, pattern in ipairs(patterns) do
+                  local raw = line:match(pattern)
+                  local value = raw and tonumber(raw)
+
+                  if value and value > 0 then
+                      local textValue = string.format("%gx", value)
+
+                      if not seen[textValue] then
+                          seen[textValue] = true
+                          values[#values + 1] = textValue
+                      end
+                  end
+              end
+          end
+      end
+
+      return values
+  end
+
+  local function effectText(descriptions, stat, valueName)
+      local multiplier = numberValue(world, valueName)
+      local percent = advertisedPercent(descriptions, stat)
+      local advertised = advertisedEffectMultipliers(descriptions, stat)
+      local parts = {}
+
+      if multiplier then
+          parts[#parts + 1] = string.format("%gx", multiplier)
+      end
+
+      local extras = {}
+      local baseText = multiplier and string.format("%gx", multiplier)
+
+      for _, value in ipairs(advertised) do
+          if value ~= baseText then
+              extras[#extras + 1] = value
+          end
+      end
+
+      if #extras > 0 then
+          parts[#parts + 1] = "E:" .. table.concat(extras, "/")
+      end
+
+      if percent then
+          parts[#parts + 1] = percent
+      end
+
+      return #parts > 0 and table.concat(parts, " ") or "?"
+  end
+
+  local function environmentText(events, now)
+      if #events == 0 then
+          eventHeading.Text = "WEATHER / EVENTS"
+          return "Unavailable"
+      end
+
+      local perPage = 6
+      local pages = math.ceil(#events / perPage)
+      local page = math.floor(now / EVENT_SCROLL_SECONDS) % pages
+      local first = page * perPage + 1
+      local last = math.min(first + perPage - 1, #events)
+
+      eventHeading.Text = string.format(
+          "WEATHER / EVENTS  %d ACTIVE%s", #events,
+          pages > 1 and string.format("  %d/%d", page + 1, pages) or ""
+      )
+
+      local lines = {}
+      for i = first, last do
+          local title = events[i]:match("[^\n]+") or events[i]
+          lines[#lines + 1] = title
+      end
+      return table.concat(lines, "\n")
+  end
+
+  local function fitText(d, text, normalSize)
+      d.Text = text
+      d.Size = normalSize
+
+      local bounds = d.TextBounds
+      local available = PANEL_W - 28
+
+      if bounds and bounds.X > available then
+          d.Size = math.max(
+              9, math.floor(normalSize * available / bounds.X)
+          )
+      end
+  end
+
+  local function refreshStats(now)
+      updateSession(now)
+      positionPanel()
+
+      local seconds = math.floor(elapsed)
+
+      timerText.Text = string.format(
+          "Runtime   %02d:%02d:%02d",
+          math.floor(seconds / 3600),
+          math.floor(seconds / 60) % 60,
+          seconds % 60
+      )
+
+      fishText.Text = "Caught    "
+          .. (sessionCaught and tostring(sessionCaught) or "--")
+
+      clockText.Text = "Server    " .. serverClock()
+
+      if now >= nextEnvironment then
+          cachedEvents, cachedDescriptions = readEnvironment()
+          nextEnvironment = now + ENVIRONMENT_INTERVAL
+      end
+
+      local serverLuck, serverConflict =
+          advertisedLuck(cachedDescriptions, "server")
+      local globalLuck, globalConflict =
+          advertisedLuck(cachedDescriptions, "global")
+
+      if not serverLuck and not serverConflict then
+          serverLuck = numberValue(world, "luck_Server")
+      end
+
+      if not globalLuck and not globalConflict then
+          globalLuck = numberValue(world, "luck_Luck")
+      end
+
+      local eventMultiplier = eventLuck(cachedEvents)
+
+      fitText(weatherText, environmentText(cachedEvents, now), 12)
+  end
+
+  local function stop()
+      if not alive then return end
+
+      alive, enabled = false, false
+      equipPending = false
+      dragging = false
+      releasePanelInput()
+      mouse(false)
+      releaseKey()
+
+      if navigationReleaseAt then
+          keyrelease(0xDC)
+          navigationReleaseAt = nil
+      end
+
+      if isrbxactive() and navigationOn then
+          navigationOn = false
+          navigationWanted = false
+
+          keypress(0xDC)
+          task.spawn(function()
+              task.wait(KEY_HOLD)
+              keyrelease(0xDC)
+          end)
+      end
+
+      for _, d in ipairs(drawings) do
+          d:Remove()
+      end
+
+      _G.StopFischMacro = nil
+  end
+
+  _G.StopFischMacro = stop
+
+  local function edge(key)
+      local value = iskeypressed(key)
+      local current = value == true
+          or (type(value) == "number" and value ~= 0)
+
+      local pressed = current and not previous[key]
+      previous[key] = current
+      return pressed
+  end
+
+  local function track(bar, fish, playerbar, now)
+      local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
+      local fp, fs = fish.AbsolutePosition, fish.AbsoluteSize
+      local bp, bs = playerbar.AbsolutePosition, playerbar.AbsoluteSize
+
+      if not (origin and size and fp and fs and bp and bs)
+          or size.X <= 0 then
+          mouse(false)
+          resetTracking()
+          return false
+      end
+
+      local f = (fp.X + fs.X / 2 - origin.X) / size.X
+      local b = (bp.X + bs.X / 2 - origin.X) / size.X
+      local width = bs.X / size.X
+
+      if f ~= f or b ~= b or width <= 0
+          or math.abs(f) > 5 or math.abs(b) > 5 then
+          mouse(false)
+          resetTracking()
+          return false
+      end
+
+      local dt = lastTime and now - lastTime or 0
+
+      if dt > 0 and dt < 0.2 then
+          local rawFish = math.clamp((f - lastFish) / dt, -3, 3)
+          local rawBar = math.clamp((b - lastBar) / dt, -3, 3)
+
+          local fa = 1 - math.exp(-dt / 0.035)
+          local ba = 1 - math.exp(-dt / 0.018)
+
+          if rawFish * fishVelocity < 0 then
+              fishVelocity = 0
+          end
+
+          fishVelocity += (rawFish - fishVelocity) * fa
+          barVelocity += (rawBar - barVelocity) * ba
+
+          local speed = math.abs(fishVelocity)
+          local smoothing = speed > activity and 0.04 or 0.30
+          local aa = 1 - math.exp(-dt / smoothing)
+          activity += (speed - activity) * aa
+
+          if math.abs(rawFish) > 0.04 then
+              fishMoving, quietTime = true, 0
+          elseif math.abs(rawFish) < 0.015 then
+              quietTime += dt
+
+              if quietTime >= 0.06 then
+                  fishMoving = false
+                  fishVelocity = 0
+              end
+          else
+              quietTime = 0
+          end
+      else
+          fishVelocity, barVelocity = 0, 0
+          fishMoving, quietTime = false, 0
+          activity = 0
+      end
+
+      lastFish, lastBar, lastTime = f, b, now
+
+      local fast = math.clamp((activity - 0.06) / 0.24, 0, 1)
+      local target, feedForward = f, 0
+
+      if fishMoving then
+          local limit = math.min(width * 0.12, 0.025)
+          local predictionTime = 0.015 + 0.030 * fast
+
+          target = math.clamp(
+              f + math.clamp(
+                  fishVelocity * predictionTime,
+                  -limit, limit
+              ),
+              0, 1
+          )
+
+          feedForward = fishVelocity
+      end
+
+      local originalGain = fishMoving and 5 or 8
+      local gain = 3.5 + (originalGain - 3.5) * fast
+      local errorPosition = target - b
+      local tolerance = math.min(width * 0.035, 0.008) * (1 - fast)
+
+      if math.abs(errorPosition) <= tolerance then
+          errorPosition = 0
+      elseif tolerance > 0 then
+          if errorPosition > 0 then
+              errorPosition -= tolerance
+          else
+              errorPosition += tolerance
+          end
+      end
+
+      local wantedVelocity = math.clamp(
+          feedForward + errorPosition * gain,
+          -1.5, 1.5
+      )
+
+      local errorVelocity = wantedVelocity - barVelocity
+      local originalThreshold = fishMoving and 0.025 or 0.012
+      local threshold = 0.030 + (originalThreshold - 0.030) * fast
+
+      local desired = held
+
+      if errorVelocity > threshold then
+          desired = true
+      elseif errorVelocity < -threshold then
+          desired = false
+      end
+
+      if math.abs(f - b) > width * 0.5 then
+          desired = f > b
+      end
+
+      mouse(desired)
+      return true
+  end
+
+  positionPanel()
+  display("OFF")
+
+  previous[0x50] = iskeypressed(0x50) == true
+  previous[0xDD] = iskeypressed(0xDD) == true
+
+  -- Force the GUI into its intended initial visible state.
+  shown = true
+  fadeAmount = 1
+  fadeLastTime = tick()
+  updateFade(fadeLastTime)
+
+  task.spawn(function()
+      local ok, err = pcall(function()
+          while alive do
+              local now = tick()
+              local toggle = edge(0x50) -- P
+              local hide = edge(0xDD) -- ]
+              local focused = isrbxactive()
+
+              if not focused then
+                  navigationWanted = navigationOn
+              end
+
+              if not panelInputCaptured then updateKeys(now) end
+              updateDrag(focused)
+
+              if focused then
+                  if hide then
+                      shown = not shown
+                  end
+
+                  if toggle then
+                      updateSession(now)
+                      enabled = not enabled
+                      equipPending = enabled and equippedRod() == nil
+                      equipReadyAt = 0
+
+                      mouse(false)
+                      releaseKey()
+                      setNavigation(false)
+
+                      releaseAt, idleSince = nil, nil
+                      recoveryStage = 0
+                      nextCast, nextEnter = now, now
+                      wasReeling = false
+                      resetTracking()
+
+                      if enabled then
+                          started, elapsed = now, 0
+                          catchBase = catches()
+                          sessionCaught = catchBase and 0 or nil
+                      end
+
+                      nextStats = 0
+                      nextEnvironment = 0
+                  end
+              end
+
+              updatePanelInput(focused)
+
+              if not enabled or not focused or panelInputCaptured then
+                  mouse(false)
+                  releaseKey()
+                  releaseAt, idleSince = nil, nil
+                  recoveryStage = 0
+                  resetTracking()
+
+                  if focused and not panelInputCaptured then
+                      setNavigation(false)
+                  end
+
+                  display(not enabled and "OFF"
+                      or panelInputCaptured and "PAUSED / PANEL"
+                      or "PAUSED / UNFOCUSED")
+              else
+                  local reel = gui and gui:FindFirstChild("reel")
+                  local bar = reel and reel:FindFirstChild("bar")
+                  local fish = bar and bar:FindFirstChild("fish")
+                  local playerbar = bar and bar:FindFirstChild("playerbar")
+
+                  local shake = gui and gui:FindFirstChild("shakeui")
+                  local safe = shake and shake:FindFirstChild("safezone")
+                  local button = safe and safe:FindFirstChild("button")
+
+                  -- Recheck after navigation settles in case the rod was
+                  -- equipped manually while the initial equip was pending.
+                  if equipPending and equippedRod() then
+                      equipPending = false
+                      equipReadyAt = 0
+                  end
+
+                  if equipPending then
+                      mouse(false)
+                      setNavigation(false)
+                      display("EQUIPPING ROD")
+
+                      if not navigationOn
+                          and not navigationReleaseAt
+                          and now >= navigationReadyAt
+                          and not pendingKey then
+
+                          if tap(0x54, now) then -- T
+                              equipPending = false
+                              equipReadyAt = now + 0.40
+                              nextCast = equipReadyAt
+                              releaseAt = nil
+                              idleSince = nil
+                          end
+                      end
+
+                  elseif now < equipReadyAt then
+                      -- Let the T hold finish and the rod equip
+                      -- before casting or handling other inputs.
+                      mouse(false)
+                      display("EQUIPPING ROD")
+
+                  elseif reel then
+                      releaseKey()
+                      setNavigation(false)
+                      idleSince = nil
+                      recoveryStage = 0
+
+                      if not wasReeling then
+                          mouse(false)
+                          resetTracking()
+                      end
+
+                      wasReeling = true
+                      releaseAt = nil
+
+                      if fish and playerbar then
+                          local valid = track(bar, fish, playerbar, now)
+
+                          display(
+                              not valid and "WAITING FOR REEL"
+                              or fishMoving and "PREDICTING"
+                              or "CENTERING"
+                          )
+                      else
+                          mouse(false)
+                          display("WAITING FOR REEL")
+                      end
+
+                  elseif button then
+                      mouse(false)
+                      releaseAt, idleSince = nil, nil
+                      recoveryStage = 0
+                      wasReeling = false
+                      resetTracking()
+
+                      if not navigationOn then
+                          setNavigation(true)
+                          nextEnter = now + 0.20
+                      else
+                          navigationWanted = true
+                      end
+
+                      if navigationOn
+                          and not navigationReleaseAt
+                          and now >= navigationReadyAt
+                          and now >= nextEnter
+                          and not pendingKey then
+
+                          if tap(0x0D, now) then -- Enter
+                              nextEnter = now + ENTER_INTERVAL
+                          end
+                      end
+
+                      display("SHAKING")
+
+                  else
+                      if navigationOn or navigationWanted then
+                          releaseKey()
+                          setNavigation(false)
+                      end
+
+                      if wasReeling then
+                          wasReeling = false
+                          mouse(false)
+                          resetTracking()
+                          nextCast, idleSince = now, now
+                      end
+
+                      idleSince = idleSince or now
+
+                      if recoveryStage == 0
+                          and now - idleSince >= FAILSAFE then
+                          mouse(false)
+                          releaseAt = nil
+                          releaseKey()
+                          recoveryStage, recoveryAt = 1, now
+                      end
+
+                      if recoveryStage > 0 then
+                          display("RECOVERING ROD")
+
+                          if now >= recoveryAt and not pendingKey then
+                              if recoveryStage == 1 then
+                                  if tap(0x54, now) then
+                                      recoveryStage = 2
+                                      recoveryAt = now + 0.35
+                                  end
+                              elseif recoveryStage == 2 then
+                                  if tap(0x54, now) then
+                                      recoveryStage = 3
+                                      recoveryAt = now + 0.35
+                                  end
+                              else
+                                  recoveryStage = 0
+                                  idleSince, nextCast = now, now
+                              end
+                          end
+
+                      elseif shake then
+                          mouse(false)
+                          releaseAt = nil
+                      elseif releaseAt then
+                          local percent, inGreen = castReading()
+                          if castMode == "Instant" and now - releaseAt >= INSTANT_HOLD then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display("INSTANT CAST")
+                          elseif castMode == "Perfect" and inGreen then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display(string.format("CAST %.0f%% / GREEN", percent))
+                          elseif now - releaseAt >= CAST_TIMEOUT then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display("CAST METER UNAVAILABLE / RETRY")
+                          else
+                              display(castMode == "Instant" and "INSTANT CAST"
+                                  or percent and string.format("CAST %.0f%% / 100%%", percent)
+                                  or "WAITING FOR CAST METER")
+                          end
+
+                      elseif dragging then
+                          display("MOVING PANEL")
+                      elseif now >= nextCast and equippedRod() then
+                          castMeter, castFill, castGreen = nil, nil, nil
+                          mouse(true)
+                          releaseAt = now -- Start of charge; not a release deadline.
+                          display(castMode == "Instant" and "INSTANT CAST" or "CAST 0% / 100%")
+                      else
+                          display("WAITING FOR BITE")
+                      end
+                  end
+              end
+
+              if now >= nextStats then
+                  refreshStats(now)
+                  nextStats = now + 0.5
+              end
+
+              updateFade(tick())
+              task.wait(0.01)
+          end
+      end)
+
+      if not ok then
+          stop()
+          warn("Fisch Macro stopped: " .. tostring(err))
+      end
+  end)
+
