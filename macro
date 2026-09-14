@@ -22,8 +22,16 @@
   local VirtualInputManager = game:GetService("VirtualInputManager")
 
   local player = Players.LocalPlayer
-  local gui = player:FindFirstChild("PlayerGui")
-  local world = RS:FindFirstChild("world")
+  if not player then
+      Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+      player = Players.LocalPlayer
+  end
+
+  local gui = player and player:FindFirstChild("PlayerGui") or nil
+
+  -- Don't touch ReplicatedStorage.world during startup.
+  -- Some executors/games initialize it slightly later.
+  local world = nil
 
   local alive, enabled, shown = true, false, true
   local instantEnabled, instantLoading = false, false
@@ -56,6 +64,7 @@
   local nextStats = 0
   local fadeAmount = 1
   local fadeLastTime = tick()
+  local borderPhase = 0
   local lastDisplay = ""
 
   local cachedEvents, cachedDescriptions = {}, {}
@@ -77,9 +86,23 @@
   }
 
   local PANEL_W, PANEL_H = 278, 420
+  local uiScale = 1
+  local MIN_UI_SCALE = 0.80
+  local MAX_UI_SCALE = 1.30
+  local UI_SCALE_STEP = 0.10
   local npcMenuOpen = false
+  local npcMenuAnim = 0
+  local dropdownAnimLast = tick()
   local npcMenuDrawings = {}
-  local totemMenu = {open = false, page = 1, pageSize = 6, top = 388, drawings = {}, slots = {}}
+  local totemMenu = {
+      open = false,
+      anim = 0,
+      page = 1,
+      pageSize = 6,
+      top = 388,
+      drawings = {},
+      slots = {}
+  }
 
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
@@ -102,15 +125,31 @@
       return d
   end
 
-  local bg = add("Square", 0, 0, 0.92)
+  local bg = add("Square", 0, 0, 0.64)
   bg.Size = Vector2.new(PANEL_W, PANEL_H)
   bg.Color = C.bg
   bg.Filled = true
+
+  -- The main GUI background already expands behind the dropdown.
+  -- Keep this helper fully transparent so opacity does not stack and
+  -- make the dropdown darker than the rest of the panel.
+  local menuBackdrop = add("Square", 0, 388, 0)
+  menuBackdrop.Size = Vector2.new(PANEL_W, 32)
+  menuBackdrop.Color = C.bg
+  menuBackdrop.Filled = true
+  menuBackdrop.Visible = false
+  local menuBackdropLayout = layout[#layout]
 
   local accent = add("Square", 0, 0)
   accent.Size = Vector2.new(PANEL_W, 2)
   accent.Color = C.red
   accent.Filled = true
+
+  local border = add("Square", 0, 0)
+  border.Size = Vector2.new(PANEL_W, PANEL_H)
+  border.Color = Color3.fromRGB(0, 0, 0)
+  border.Filled = false
+  border.Thickness = 2
 
   local function label(value, x, y, size)
       local d = add("Text", x, y)
@@ -125,12 +164,23 @@
   local titleText = label("Fisch Macro", 14, 13, 20)
   titleText.Color = C.pink
 
+  local resizeMinus = label("-", PANEL_W - 48, 12, 17)
+  resizeMinus.Color = Color3.fromRGB(255, 70, 70)
+
+  local resizePlus = label("+", PANEL_W - 25, 12, 17)
+  resizePlus.Color = Color3.fromRGB(70, 255, 110)
+
+  local watermark = label("made by: 1a", PANEL_W - 112, 16, 9)
+  watermark.Color = C.muted
+
   local statusText = label("OFF", 14, 42, 12)
   local fishText = label("Caught    --", 14, 69, 14)
   local timerText = label("Runtime   00:00:00", 14, 91, 14)
   local clockText = label("Server    --", 14, 113, 14)
   local eventHeading = label("WEATHER / EVENTS", 14, 139, 10)
-  eventHeading.Color = C.cyan
+  eventHeading.Color = Color3.fromRGB(25, 60, 130) -- dark blue
+  eventHeading.Outline = true
+
   local weatherText = label("--", 14, 156, 12)
 
   local divider = add("Square", 14, 258)
@@ -139,10 +189,10 @@
   divider.Filled = true
 
   label("P Toggle    ] Hide", 14, 268, 11)
-  local castModeText = label("Instant cast", 145, 268, 11)
-  castModeText.Color = C.blue
   local instantText = label("L Instant catch OFF", 14, 292, 11)
   instantText.Color = C.instantOff
+  local castModeText = label("Instant cast", 14, 316, 11)
+  castModeText.Color = C.blue
   label("(u have to catch a", 151, 291, 9)
   label("fish first before", 151, 303, 9)
   label("enabling)", 151, 315, 9)
@@ -155,7 +205,7 @@
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
-      npcMenuDrawings[d] = true
+      npcMenuDrawings[d] = y
       d.Visible = false
       return d
   end
@@ -175,7 +225,6 @@
       {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 555},
   }
   -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
-  -- Coordinates: fischepedia.com/wiki/<totem-name>/ and bloxodes.com/wiki/fisch/totems
   totemMenu.rows = {
       {name = "Clearcast", pos = {701, 250, 305}},
       {name = "Tempest", pos = {36, 135, 1946}},
@@ -331,24 +380,40 @@
       local camera = W:FindFirstChildOfClass("Camera")
       local viewport = camera and camera.ViewportSize
 
+      local drawW, drawH = PANEL_W * uiScale, PANEL_H * uiScale
       local x = panelX or (viewport
-          and math.max(8, viewport.X - PANEL_W - 18) or 900
+          and math.max(8, viewport.X - drawW - 18) or 900
       )
       local y = panelY or (viewport
-          and math.max(8, (viewport.Y - PANEL_H) / 2) or 260
+          and math.max(8, (viewport.Y - drawH) / 2) or 260
       )
 
       if viewport then
-          x = math.clamp(x, 0, math.max(0, viewport.X - PANEL_W))
-          y = math.clamp(y, 0, math.max(0, viewport.Y - PANEL_H))
+          x = math.clamp(x, 0, math.max(0, viewport.X - drawW))
+          y = math.clamp(y, 0, math.max(0, viewport.Y - drawH))
       end
 
-      if x == lastPanelX and y == lastPanelY then return end
       lastPanelX, lastPanelY = x, y
 
       for _, entry in ipairs(layout) do
-          entry.d.Position = Vector2.new(x + entry.x, y + entry.y)
+          entry.d.Position = Vector2.new(x + entry.x * uiScale, y + entry.y * uiScale)
+          local ok, size = pcall(function() return entry.d.Size end)
+          if ok and size then
+              if entry.baseSize == nil then
+                  if type(size) == "number" then
+                      entry.baseSize = size
+                  elseif size.X and size.Y then
+                      entry.baseSize = Vector2.new(size.X, size.Y)
+                  end
+              end
+              if type(entry.baseSize) == "number" then
+                  entry.d.Size = entry.baseSize * uiScale
+              elseif entry.baseSize then
+                  entry.d.Size = entry.baseSize * uiScale
+              end
+          end
       end
+      border.Size = Vector2.new(drawW, drawH)
   end
 
   local function updateDrag(focused)
@@ -359,8 +424,8 @@
           dragging = false
       elseif down then
           if not rightWasDown and lastPanelX and lastPanelY
-              and x >= lastPanelX and x <= lastPanelX + PANEL_W
-              and y >= lastPanelY and y <= lastPanelY + PANEL_H then
+              and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+              and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
               dragging = true
               dragOffsetX, dragOffsetY = x - lastPanelX, y - lastPanelY
           end
@@ -377,6 +442,21 @@
   local function updateFade(now)
       local dt = math.max(0, now - fadeLastTime)
       fadeLastTime = now
+      borderPhase = (borderPhase + dt * 2.4) % (math.pi * 2)
+      local pulse = (math.sin(borderPhase) + 1) / 2
+      local edgeLevel = 120 + 135 * pulse
+      local edgeColor = Color3.fromRGB(edgeLevel, 35, edgeLevel)
+      border.Color = edgeColor
+      accent.Color = edgeColor
+
+
+      -- Smooth watermark loop: pink -> white -> pink.
+      local watermarkPulse = (math.sin(borderPhase) + 1) / 2
+      watermark.Color = Color3.new(
+          C.pink.R + (C.white.R - C.pink.R) * watermarkPulse,
+          C.pink.G + (C.white.G - C.pink.G) * watermarkPulse,
+          C.pink.B + (C.white.B - C.pink.B) * watermarkPulse
+      )
 
       local target = shown and 1 or 0
 
@@ -387,10 +467,18 @@
       end
 
       for _, entry in ipairs(layout) do
-          entry.d.Transparency = entry.opacity * fadeAmount
-          entry.d.Visible = fadeAmount > 0.001
-              and (not npcMenuDrawings[entry.d] or npcMenuOpen)
-              and (not totemMenu.drawings[entry.d] or totemMenu.open)
+          local menuAlpha = 1
+
+          if npcMenuDrawings[entry.d] then
+              menuAlpha = npcMenuAnim
+          elseif totemMenu.drawings[entry.d] then
+              menuAlpha = totemMenu.anim
+          elseif entry.d == menuBackdrop then
+              menuAlpha = math.max(npcMenuAnim, totemMenu.anim)
+          end
+
+          entry.d.Transparency = entry.opacity * fadeAmount * menuAlpha
+          entry.d.Visible = fadeAmount > 0.001 and menuAlpha > 0.001
       end
   end
 
@@ -546,28 +634,92 @@
       npcStatus.Text = row.name .. (live and ": moved" or ": map location")
   end
 
+  local function resizePanel(delta)
+      uiScale = math.clamp(uiScale + delta, MIN_UI_SCALE, MAX_UI_SCALE)
+      positionPanel()
+  end
+
   local function layoutTeleportMenus()
-      totemMenu.top = npcMenuOpen and 617 or 388
+      -- Tiny slide animation:
+      -- NPC expansion pushes the Totems header down smoothly.
+      -- Totem expansion grows the bottom of the panel smoothly.
+      totemMenu.top = 388 + 229 * npcMenuAnim
       npcArrow.Text = npcMenuOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
-      PANEL_H = totemMenu.top + (totemMenu.open and 253 or 32)
-      bg.Size = Vector2.new(PANEL_W, PANEL_H)
+
+      PANEL_H = totemMenu.top + 32 + 221 * totemMenu.anim
+
+      -- Do NOT write the raw/unscaled Size here.
+      -- positionPanel() applies uiScale from baseSize below. Writing the
+      -- unscaled size first causes a visible base-size flash when uiScale > 1.
+      -- Keep the cached layout size in sync with the animated height.
+      -- positionPanel() uses baseSize, so leaving the old size cached can
+      -- momentarily redraw the previous panel/border position.
       for _, entry in ipairs(layout) do
-          if entry.d == totemMenu.title then entry.y = totemMenu.top + 8
-          elseif entry.d == totemMenu.arrow then entry.y = totemMenu.top + 6
-          elseif totemMenu.drawings[entry.d] then
-              entry.y = totemMenu.top + totemMenu.drawings[entry.d]
+          if entry.d == bg or entry.d == border then
+              -- Keep BOTH the background and animated purple outline at the
+              -- current dropdown height before positionPanel() draws them.
+              -- Otherwise the border briefly uses its previous cached height,
+              -- causing a purple horizontal line to flash at the old bottom.
+              entry.baseSize = Vector2.new(PANEL_W, PANEL_H)
           end
       end
+
+      local backdropHeight = math.max(0, PANEL_H - 388)
+      menuBackdropLayout.y = 388
+      -- Same rule as the main background: cache the logical size and let
+      -- positionPanel() apply uiScale once, avoiding an unscaled flash.
+      menuBackdropLayout.baseSize = Vector2.new(PANEL_W, backdropHeight)
+      menuBackdrop.Visible = math.max(npcMenuAnim, totemMenu.anim) > 0.001
+
+      for _, entry in ipairs(layout) do
+          if entry.d == totemMenu.title then
+              entry.y = totemMenu.top + 8
+          elseif entry.d == totemMenu.arrow then
+              entry.y = totemMenu.top + 6
+          elseif npcMenuDrawings[entry.d] then
+              -- Content rises the last few pixels while fading in.
+              entry.y = npcMenuDrawings[entry.d] - (1 - npcMenuAnim) * 6
+          elseif totemMenu.drawings[entry.d] then
+              entry.y = totemMenu.top + totemMenu.drawings[entry.d]
+                  - (1 - totemMenu.anim) * 6
+          end
+      end
+
       for i, d in ipairs(totemMenu.slots) do
           local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + i]
           d.Text = row and row.name or ""
       end
-      totemMenu.pageLabel.Text = totemMenu.page .. " / " .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
+
+      totemMenu.pageLabel.Text = totemMenu.page .. " / "
+          .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
+
+      -- Keep the panel anchored in the same place while its height animates.
       panelX, panelY = lastPanelX, lastPanelY
       lastPanelX, lastPanelY = nil, nil
       positionPanel()
-      updateFade(tick())
+  end
+
+  local function updateDropdownAnimation(now)
+      local dt = math.max(0, math.min(0.05, now - dropdownAnimLast))
+      dropdownAnimLast = now
+
+      local npcTarget = npcMenuOpen and 1 or 0
+      local totemTarget = totemMenu.open and 1 or 0
+
+      -- Exponential easing gives a short, soft pop without feeling floaty.
+      local blend = 1 - math.exp(-dt * 24)
+      npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
+      totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
+
+      if math.abs(npcMenuAnim - npcTarget) < 0.002 then
+          npcMenuAnim = npcTarget
+      end
+      if math.abs(totemMenu.anim - totemTarget) < 0.002 then
+          totemMenu.anim = totemTarget
+      end
+
+      layoutTeleportMenus()
   end
 
   local function teleportTotem(row)
@@ -619,8 +771,8 @@
       local x, y = cursor.X, cursor.Y
       local inside = focused and shown and lastPanelX and lastPanelY
           and type(x) == "number" and type(y) == "number"
-          and x >= lastPanelX and x <= lastPanelX + PANEL_W
-          and y >= lastPanelY and y <= lastPanelY + PANEL_H
+          and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+          and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
       local capture = focused and shown and (inside or dragging)
       if capture and not panelInputCaptured then
           -- Release synthetic inputs before blocking game input.
@@ -639,21 +791,32 @@
 
       local value = ismouse1pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
+      local localX = inside and (x - lastPanelX) / uiScale or 0
+      local localY = inside and (y - lastPanelY) / uiScale or 0
+
       if inside and not dragging and down and not leftWasDown
-          and x >= lastPanelX + 139 and x <= lastPanelX + PANEL_W - 8
-          and y >= lastPanelY + 263 and y <= lastPanelY + 283 then
+          and localX >= 10 and localX <= 147
+          and localY >= 311 and localY <= 337 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
           castModeText.Text = castMode .. " cast"
           castModeText.Color = castMode == "Instant" and C.blue or C.green
           lastDisplay = ""
       end
       if inside and not dragging and down and not leftWasDown
-          and x >= lastPanelX + 10 and x <= lastPanelX + 147
-          and y >= lastPanelY + 287 and y <= lastPanelY + 313 then
+          and localY >= 5 and localY <= 35 then
+          if localX >= PANEL_W - 58 and localX <= PANEL_W - 34 then
+              resizePanel(-UI_SCALE_STEP)
+          elseif localX >= PANEL_W - 33 and localX <= PANEL_W - 5 then
+              resizePanel(UI_SCALE_STEP)
+          end
+      end
+
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 287 and localY <= 313 then
           toggleInstant()
       end
       if inside and not dragging and down and not leftWasDown then
-          local localY = y - lastPanelY
           if localY >= 357 and localY <= 387 then
               npcMenuOpen = not npcMenuOpen
               if npcMenuOpen then totemMenu.open = false end
@@ -666,8 +829,8 @@
               local offset = localY - totemMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
-                  if x < lastPanelX + 95 then totemMenu.page = math.max(1, totemMenu.page - 1)
-                  elseif x > lastPanelX + 190 then totemMenu.page = math.min(pages, totemMenu.page + 1) end
+                  if localX < 95 then totemMenu.page = math.max(1, totemMenu.page - 1)
+                  elseif localX > 190 then totemMenu.page = math.min(pages, totemMenu.page + 1) end
                   layoutTeleportMenus()
               elseif offset >= 32 and offset < 32 + totemMenu.pageSize * 27 then
                   local slot = math.floor((offset - 32) / 27) + 1
@@ -801,8 +964,8 @@
   end
 
   local function readEnvironment()
-      gui = player:FindFirstChild("PlayerGui")
-      world = RS:FindFirstChild("world")
+      gui = player and player:FindFirstChild("PlayerGui") or gui
+      world = RS and RS:FindFirstChild("world") or nil
 
       local events, descriptions = {}, {}
       local seenEvents, seenDescriptions = {}, {}
@@ -1164,14 +1327,14 @@
 
   local function fitText(d, text, normalSize)
       d.Text = text
-      d.Size = normalSize
+      d.Size = normalSize * uiScale
 
       local bounds = d.TextBounds
-      local available = PANEL_W - 28
+      local available = (PANEL_W - 28) * uiScale
 
       if bounds and bounds.X > available then
           d.Size = math.max(
-              9, math.floor(normalSize * available / bounds.X)
+              9 * uiScale, math.floor(normalSize * uiScale * available / bounds.X)
           )
       end
   end
@@ -1449,7 +1612,7 @@
       return true
   end
 
-  positionPanel()
+  layoutTeleportMenus()
   display("OFF")
 
   previous[0x50] = iskeypressed(0x50) == true
@@ -1694,7 +1857,8 @@
                   nextStats = now + 0.5
               end
 
-              updateFade(tick())
+              updateDropdownAnimation(now)
+              updateFade(now)
               task.wait(0.01)
           end
       end)
