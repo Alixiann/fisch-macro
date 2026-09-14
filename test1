@@ -1,0 +1,2030 @@
+  if _G.StopAutoCast then _G.StopAutoCast() end
+  if _G.StopCastHelper then _G.StopCastHelper() end
+  if _G.StopFischMacro then _G.StopFischMacro() end
+  if _G.StopFischInstantCatch then _G.StopFischInstantCatch() end
+  if _G.FischCatch then _G.FischCatch.running = false end
+  local CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
+  local INSTANT_HOLD = 0.15 -- Short cast tap; clears Fisch's initial input delay.
+  local castMode = "Instant"
+  local RETRY = 2
+  local FAILSAFE = 20
+  local ENTER_INTERVAL = 0.10
+  local KEY_HOLD = 0.06
+  local FADE_SECONDS = 0.22
+  local ENVIRONMENT_INTERVAL = 2
+  local EVENT_SCROLL_SECONDS = 4
+  local Players = game:GetService("Players")
+  local RS = game:GetService("ReplicatedStorage")
+  local Lighting = game:GetService("Lighting")
+  local W = game:GetService("Workspace")
+  local VirtualInputManager = game:GetService("VirtualInputManager")
+  local UserInputService = game:GetService("UserInputService")
+  local player = Players.LocalPlayer
+  if not player then
+      Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
+      player = Players.LocalPlayer
+  end
+  local gui = player and player:FindFirstChild("PlayerGui") or nil
+  if player and not gui then
+      gui = player:WaitForChild("PlayerGui")
+  end
+  local world = nil
+  local alive, enabled, shown = true, false, true
+  local harpoonPullEnabled = false
+  local instantEnabled, instantLoading = false, false
+  local instantCache, instantOriginal
+  local instantGeneration, nextInstant = 0, 0
+  local toggleInstant
+  local toggleMacro
+  local toggleHarpoonPull
+  local held, wasReeling = false, false
+  local equipPending = false
+  local equipReadyAt = 0
+  local navigationOn = false
+  local navigationReleaseAt
+  local navigationReadyAt = 0
+  local navigationWanted = false
+  local pendingKey, keyReleaseAt
+  local nextCast, releaseAt = 0, nil
+  local castMeter, castFill, castGreen
+  local idleSince
+  local recoveryStage, recoveryAt = 0, 0
+  local previous, drawings, layout = {}, {}, {}
+  local inputConnections = {}
+  local lastFish, lastBar, lastTime
+  local fishVelocity, barVelocity = 0, 0
+  local fishMoving, quietTime = false, 0
+  local activity = 0
+  local started, elapsed = 0, 0
+  local catchBase, sessionCaught
+  local nextStats = 0
+  local fadeAmount = 1
+  local fadeLastTime = tick()
+  local borderPhase = 0
+  local lastDisplay = ""
+  local cachedEvents, cachedDescriptions = {}, {}
+  local nextEnvironment = 0
+  local C = {
+      bg = Color3.fromRGB(55, 65, 83),
+      line = Color3.fromRGB(143, 162, 187),
+      white = Color3.fromRGB(255, 255, 255),
+      muted = Color3.fromRGB(224, 233, 246),
+      green = Color3.fromRGB(130, 255, 189),
+      blue = Color3.fromRGB(153, 215, 255),
+      pink = Color3.fromRGB(255, 125, 205),
+      cyan = Color3.fromRGB(90, 240, 255),
+      red = Color3.fromRGB(255, 153, 165),
+      yellow = Color3.fromRGB(255, 226, 147),
+      instantOn = Color3.fromRGB(0, 255, 0),
+      instantOff = Color3.fromRGB(255, 0, 0),
+  }
+  local PANEL_W, PANEL_H = 278, 420
+  local uiScale = 1
+  local MIN_UI_SCALE = 0.80
+  local MAX_UI_SCALE = 1.30
+  local UI_SCALE_STEP = 0.10
+  local MACRO_KEY = 0xA3
+  local INSTANT_KEY = 0xA5
+  local npcMenuOpen = false
+  local npcMenuAnim = 0
+  local npcSubOpen = false
+  local dropdownAnimLast = tick()
+  local npcMenuDrawings = {}
+  local instantHintDrawings = {}
+  local totemMenu = {
+      open = false,
+      anim = 0,
+      page = 1,
+      pageSize = 6,
+      top = 388,
+      drawings = {},
+      slots = {}
+  }
+  local islandMenu = {
+      open = false,
+      anim = 0,
+      page = 1,
+      pageSize = 6,
+      top = 420,
+      drawings = {},
+      slots = {}
+  }
+  local customGpsFallbackBox, customGpsFallbackText, customGpsFallbackButton
+  local customGpsText = ""
+  local customGpsEditing = false
+  local customGpsKeys = {}
+  local function add(kind, x, y, baseOpacity)
+      local d = Drawing.new(kind)
+      d.Visible = true
+      d.ZIndex = #drawings + 1
+      local opacity = baseOpacity
+      if opacity == nil then opacity = 1 end
+      d.Transparency = opacity
+      drawings[#drawings + 1] = d
+      layout[#layout + 1] = {
+          d = d,
+          x = x,
+          y = y,
+          opacity = opacity,
+      }
+      return d
+  end
+  local bg = add("Square", 0, 0, 0.64)
+  bg.Size = Vector2.new(PANEL_W, PANEL_H)
+  bg.Color = C.bg
+  bg.Filled = true
+  local menuBackdrop = add("Square", 0, 388, 0)
+  menuBackdrop.Size = Vector2.new(PANEL_W, 32)
+  menuBackdrop.Color = C.bg
+  menuBackdrop.Filled = true
+  menuBackdrop.Visible = false
+  local menuBackdropLayout = layout[#layout]
+  local accent = add("Square", 0, 0)
+  accent.Size = Vector2.new(PANEL_W, 2)
+  accent.Color = C.red
+  accent.Filled = true
+  local border = add("Square", 0, 0)
+  border.Size = Vector2.new(PANEL_W, PANEL_H)
+  border.Color = Color3.fromRGB(0, 0, 0)
+  border.Filled = false
+  border.Thickness = 2
+  local function label(value, x, y, size)
+      local d = add("Text", x, y)
+      d.Text = value
+      d.Size = size
+      d.Font = 7 -- Matcha Pixel font.
+      d.Outline = false
+      d.Color = Color3.fromRGB(255, 255, 255)
+      return d
+  end
+  local titleText = label("Fisch Macro", 14, 13, 20)
+  titleText.Color = C.pink
+  local resizeMinus = label("-", PANEL_W - 48, 12, 17)
+  resizeMinus.Color = Color3.fromRGB(255, 70, 70)
+  local resizePlus = label("+", PANEL_W - 25, 12, 17)
+  resizePlus.Color = Color3.fromRGB(70, 255, 110)
+  local watermark = label("made by: 1a", PANEL_W - 112, 16, 9)
+  watermark.Color = C.muted
+  local statusText = label("OFF", 14, 42, 12)
+  local fishText = label("Caught    --", 14, 69, 14)
+  local timerText = label("Runtime   00:00:00", 14, 91, 14)
+  local clockText = label("Server    --", 14, 113, 14)
+  local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 13, 139, 12)
+  local eventHeadingOutlineRight = label("WEATHER / EVENTS", 15, 139, 12)
+  local eventHeadingOutlineUp = label("WEATHER / EVENTS", 14, 138, 12)
+  local eventHeadingOutlineDown = label("WEATHER / EVENTS", 14, 140, 12)
+  for _, outline in ipairs({
+      eventHeadingOutlineLeft, eventHeadingOutlineRight,
+      eventHeadingOutlineUp, eventHeadingOutlineDown,
+  }) do
+      outline.Color = C.white
+  end
+  local eventHeading = label("WEATHER / EVENTS", 14, 139, 12)
+  eventHeading.Color = Color3.fromRGB(25, 60, 130) -- dark blue
+  eventHeading.Outline = false
+  local weatherText = label("--", 14, 156, 12)
+  local divider = add("Square", 14, 258)
+  divider.Size = Vector2.new(PANEL_W - 28, 1)
+  divider.Color = C.line
+  divider.Filled = true
+  local macroText = label("Macro OFF", 14, 268, 11)
+  macroText.Color = C.instantOff
+  label("Keybind: R-Ctrl", 151, 268, 9)
+  local instantText = label("Instant catch OFF", 14, 292, 11)
+  instantText.Color = C.instantOff
+  label("Keybind: R-Alt", 151, 292, 9)
+  local castModeText = label("Instant cast", 14, 316, 11)
+  castModeText.Color = C.instantOff
+  local instantHint1 = label("(catch a fish before", 14, 397, 9)
+  local instantHint2 = label("enabling instant catch)", 14, 409, 9)
+  instantHint1.Color, instantHint2.Color = C.muted, C.muted
+  instantHintDrawings[instantHint1] = 397
+  instantHintDrawings[instantHint2] = 397
+  local harpoonPullText = label("Harpoon Pull OFF", 14, 341, 11)
+  harpoonPullText.Color = C.instantOff
+  label("Keybind: [", 151, 341, 9)
+  local harpoonToggleLast = 0
+  local npcToggleText = label("Teleports", 14, 365, 12)
+  npcToggleText.Color = C.cyan
+  local npcArrow = label("v", 251, 363, 16)
+  local function npcLabel(text, x, y, size, color)
+      local d = label(text, x, y, size)
+      d.Color = color or C.white
+      npcMenuDrawings[d] = y
+      d.Visible = false
+      return d
+  end
+  npcLabel("CUSTOM GPS", 14, 397, 11, C.cyan)
+  local npcSubArrow = npcLabel("v", 251, 450, 16, C.cyan)
+  npcLabel("NPCs", 14, 452, 11, C.green)
+  npcLabel("BUFFERS", 14, 480, 11, C.yellow)
+  npcLabel("Merlin", 26, 504, 12)
+  npcLabel("Astronomer Vega", 26, 532, 12)
+  npcLabel("SHOPS", 14, 564, 11, C.pink)
+  npcLabel("Daily Shopkeeper", 26, 588, 12)
+  npcLabel("Rare Goods Dealer", 26, 616, 12)
+  npcLabel("Elder Kaito", 26, 644, 12)
+  npcLabel("ETC", 14, 672, 11, Color3.fromRGB(255, 175, 90))
+  npcLabel("Shells", 26, 700, 12)
+  local npcStatus = npcLabel("Click a name to teleport", 14, 731, 10, C.muted)
+  local npcRows = {
+      {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
+      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526, preferHead = true},
+      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 582, pos = {229, 139, 42}},
+      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 610, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
+      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, pos = {3000, 1635, 901}, exactPosition = true, skipNpc = true},
+      {name = "Shells", aliases = {}, y = 694, pos = {-3822, -1280, 500}, exactPosition = true, skipNpc = true},
+  }
+  totemMenu.rows = {
+      {name = "Clearcast", pos = {701, 250, 305}},
+      {name = "Tempest", pos = {36, 135, 1946}},
+      {name = "Windset", pos = {2851, 178, 2703}},
+      {name = "Smokescreen", pos = {2791, 139, -629}},
+      {name = "Meteor (Roslit)", match = "Meteor", pos = {-1944, 276, 231}},
+      {name = "Eclipse", pos = {5967, 274, 839}},
+      {name = "Avalanche", pos = {19708, 467, 6058}},
+      {name = "Blizzard", pos = {20147, 743, 5805}},
+      {name = "Blue Moon", pos = {2715, 140, 2480}},
+      {name = "Zeus Storm", pos = {-4326, -627, 2687}},
+      {name = "Dripstone Collapse", pos = {3158, -1105, 788}},
+  }
+  totemMenu.title = label("Totems", 14, 396, 12)
+  totemMenu.title.Color = C.yellow
+  totemMenu.arrow = label("v", 251, 394, 16)
+  local function totemLabel(text, x, offset, size, color)
+      local d = label(text, x, totemMenu.top + offset, size)
+      d.Color = color or C.white
+      totemMenu.drawings[d] = offset
+      d.Visible = false
+      return d
+  end
+  for i = 1, totemMenu.pageSize do
+      totemMenu.slots[i] = totemLabel("", 26, 38 + (i - 1) * 27, 12)
+  end
+  totemMenu.prev = totemLabel("< Prev", 14, 204, 11, C.cyan)
+  totemMenu.pageLabel = totemLabel("1 / 3", 113, 204, 11, C.muted)
+  totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
+  totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
+  islandMenu.rows = {
+      {name = "Moosewood", pos = {350, 135, 250}},
+      {name = "Roslit Bay", pos = {-1450, 135, 750}},
+      {name = "Sunstone Island", pos = {-935, 130, -1105}},
+      {name = "Terrapin Island", pos = {-190, 130, 1925}},
+      {name = "Forsaken Shores", pos = {-2425, 135, 1555}},
+      {name = "Snowcap Island", pos = {2600, 150, 2400}},
+      {name = "Mushgrove Swamp", pos = {2425, 127, -670}},
+      {name = "Desolate Deep", pos = {-790, 110, -3100}},
+      {name = "Ancient Isle", pos = {6050, 195, 330}},
+      {name = "Northern Expedition", pos = {19977, 917, 5375}},
+      {name = "Tidefall", pos = {3223, 130, 850}},
+      {name = "Skycrest", match = {"skycrest", "skycrestisland"}, pos = {-25990, 3094, -5036}},
+      {name = "Cursed Isle", pos = {1860, 127, 1210}},
+      {name = "Grand Reef", pos = {-3530, 130, 550}},
+      {name = "Dry Lands", match = {"drylands", "dryland"}, pos = {-23525, 2630, -5750}, offset = {0, -8, 18}},
+      {name = "Lost Jungle", pos = {-2680, 154, -2078}},
+      {name = "Scoria Reach", pos = {-4781, 138, -1378}},
+      {name = "Statue of Sovereignty", pos = {20, 160, -1040}},
+      {name = "The Deep", pos = {228, 130, -11945}},
+      {name = "Everturn Forest", pos = {2365, 130, -2330}},
+      {name = "Castaway Cliffs", pos = {690, 135, -1693}},
+  }
+  islandMenu.title = label("Islands", 14, 428, 12)
+  islandMenu.title.Color = C.pink
+  islandMenu.arrow = label("v", 251, 426, 16)
+  local function islandLabel(text, x, offset, size, color)
+      local d = label(text, x, islandMenu.top + offset, size)
+      d.Color = color or C.white
+      islandMenu.drawings[d] = offset
+      d.Visible = false
+      return d
+  end
+  for i = 1, islandMenu.pageSize do
+      islandMenu.slots[i] = islandLabel("", 26, 38 + (i - 1) * 27, 12)
+  end
+  islandMenu.prev = islandLabel("< Prev", 14, 204, 11, C.cyan)
+  islandMenu.pageLabel = islandLabel("1 / 2", 113, 204, 11, C.muted)
+  islandMenu.next = islandLabel("Next >", 213, 204, 11, C.cyan)
+  islandMenu.status = islandLabel("Click to teleport", 14, 229, 10, C.muted)
+  local function npcName(value)
+      return tostring(value):lower():gsub("[^%w]", "")
+  end
+  local function findNpcPosition(row)
+      for _, object in ipairs(W:GetDescendants()) do
+          local match = false
+          local name = npcName(object.Name)
+          for _, alias in ipairs(row.aliases) do
+              if name == alias then match = true; break end
+          end
+          if match then
+              local model = object
+              if model.ClassName ~= "Model" then model = object.Parent end
+              if model and model.ClassName == "Model" then
+                  local part
+                  if row.preferHead then
+                      part = model:FindFirstChild("Head")
+                          or model:FindFirstChild("HumanoidRootPart") or model.PrimaryPart
+                  else
+                      part = model:FindFirstChild("HumanoidRootPart")
+                          or model:FindFirstChild("Head") or model.PrimaryPart
+                  end
+                  if part then return part.Position end
+              end
+          end
+      end
+  end
+  local function updateInstantLabel()
+      instantText.Text = instantLoading and "L Loading..."
+          or instantEnabled and "Instant catch ON" or "Instant catch OFF"
+      instantText.Color = instantEnabled and C.instantOn or C.instantOff
+  end
+  local lastPanelX, lastPanelY
+  local panelX, panelY
+  local dragging, rightWasDown = false, false
+  local dragOffsetX, dragOffsetY = 0, 0
+  local cursor = player:GetMouse()
+  local panelInputCaptured = false
+  local leftWasDown = false
+  local function activeShakeButton()
+      local currentGui = player:FindFirstChildOfClass("PlayerGui")
+      local shakeGui = currentGui and currentGui:FindFirstChild("shakeui")
+      if not shakeGui then return nil end
+      local function visibleInTree(object)
+          local node = object
+          while node and node ~= shakeGui do
+              local ok, visible = pcall(function() return node.Visible end)
+              if ok and visible == false then return false end
+              node = node.Parent
+          end
+          return true
+      end
+      local function hasShakeText(object)
+          local ok, value = pcall(function() return object.Text end)
+          return ok and type(value) == "string"
+              and value:lower():find("shake", 1, true) ~= nil
+      end
+      for _, object in ipairs(shakeGui:GetDescendants()) do
+          if (object:IsA("GuiButton") or object:IsA("TextLabel"))
+              and visibleInTree(object) and hasShakeText(object) then
+              local node = object
+              while node and node ~= shakeGui do
+                  if node:IsA("GuiButton") then return node end
+                  node = node.Parent
+              end
+              if object:IsA("GuiButton") then return object end
+          end
+      end
+      return nil
+  end
+  local function activeHarpoonPullButton()
+      local currentGui = player:FindFirstChildOfClass("PlayerGui")
+      if not currentGui then return nil end
+      local minigame = currentGui:FindFirstChild("harpoonMinigame")
+      local safezone = minigame and minigame:FindFirstChild("safezone")
+      if not safezone then return nil end
+      local newest
+      for _, object in ipairs(safezone:GetChildren()) do
+          local objectName = tostring(object.Name):lower()
+          if object.ClassName == "ImageButton" and objectName:find("pull", 1, true) then
+              local ok, size = pcall(function() return object.AbsoluteSize end)
+              if ok and size and size.X > 8 and size.Y > 8 then
+                  local title = object:FindFirstChild("title")
+                  local textOk, text = pcall(function() return title and title.Text end)
+                  local normalized = textOk and type(text) == "string"
+                      and text:upper():gsub("[^%a]", "") or ""
+                  if normalized == "PULL" then
+                      newest = object
+                  end
+              end
+          end
+      end
+      return newest
+  end
+  local function moveMouseFast(x, y)
+      if type(mousemoveabs) == "function" then
+          return pcall(mousemoveabs, x, y)
+      elseif type(setcursorpos) == "function" then
+          return pcall(setcursorpos, x, y)
+      elseif type(mousemoverel) == "function" then
+          local cx, cy = cursor.X, cursor.Y
+          if type(cx) == "number" and type(cy) == "number" then
+              return pcall(mousemoverel, x - cx, y - cy)
+          end
+      end
+      return false
+  end
+  local lastShakeX, lastShakeY
+  local lastShakeMoveAt = tick()
+  local harpoonNextClickAt = 0
+  local harpoonReadyAt = 0
+  task.spawn(function()
+      while alive do
+          if (enabled or harpoonPullEnabled) and not panelInputCaptured then
+              local isHarpoonButton = harpoonPullEnabled
+              local button = harpoonPullEnabled and activeHarpoonPullButton()
+                  or (enabled and activeShakeButton())
+              if button then
+                  local buttonX, buttonY
+                  local didClick = false
+                  pcall(function()
+                      local p, size = button.AbsolutePosition, button.AbsoluteSize
+                      local x, y = p.X + size.X / 2, p.Y + size.Y / 2
+                      buttonX, buttonY = x, y
+                      moveMouseFast(x, y)
+                      if isHarpoonButton then
+                          task.wait(0.01)
+                          moveMouseFast(x, y)
+                          if tick() >= harpoonNextClickAt and harpoonReadyAt == 0 then
+                              harpoonReadyAt = tick() + 0.1
+                          end
+                      end
+                      if not isHarpoonButton
+                          or (tick() >= harpoonNextClickAt and tick() >= harpoonReadyAt) then
+                          didClick = true
+                          if isHarpoonButton then
+                              pcall(mouse1click)
+                          else
+                              pcall(mouse1press)
+                              task.wait(0.02)
+                              pcall(mouse1release)
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  x, y, 0, true, player, 0)
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  x, y, 0, false, player, 0)
+                          end
+                      end
+                  end)
+                  if buttonX then
+                      if isHarpoonButton and didClick then
+                          harpoonNextClickAt = tick() + 0.05
+                          harpoonReadyAt = 0
+                      end
+                      if not lastShakeX
+                          or math.abs(buttonX - lastShakeX) > 2
+                          or math.abs(buttonY - lastShakeY) > 2 then
+                          lastShakeX, lastShakeY = buttonX, buttonY
+                          lastShakeMoveAt = tick()
+                      elseif tick() - lastShakeMoveAt >= 1 then
+                          moveMouseFast(buttonX + 3, buttonY)
+                          task.wait(0.02)
+                          moveMouseFast(buttonX, buttonY)
+                          lastShakeMoveAt = tick()
+                      end
+                  end
+                  task.wait(isHarpoonButton and 0.1 or 0.06)
+              else
+                  task.wait(0.03)
+              end
+          else
+              task.wait(0.05)
+          end
+      end
+  end)
+  local function releasePanelInput()
+      if panelInputCaptured then
+          setrobloxinput(true)
+          panelInputCaptured = false
+      end
+  end
+  local function positionPanel()
+      local camera = W:FindFirstChildOfClass("Camera")
+      local viewport = camera and camera.ViewportSize
+      local drawW, drawH = PANEL_W * uiScale, PANEL_H * uiScale
+      local x = panelX or (viewport
+          and math.max(8, viewport.X - drawW - 18) or 900
+      )
+      local y = panelY or (viewport
+          and math.max(8, (viewport.Y - drawH) / 2) or 260
+      )
+      if viewport then
+          x = math.clamp(x, 0, math.max(0, viewport.X - drawW))
+          y = math.clamp(y, 0, math.max(0, viewport.Y - drawH))
+      end
+      lastPanelX, lastPanelY = x, y
+      if customGpsFallbackBox then
+          local visible = shown and npcMenuOpen
+          customGpsFallbackBox.Visible = visible
+          customGpsFallbackText.Visible = visible
+          customGpsFallbackButton.Visible = visible
+      end
+      for _, entry in ipairs(layout) do
+          entry.d.Position = Vector2.new(x + entry.x * uiScale, y + entry.y * uiScale)
+          local ok, size = pcall(function() return entry.d.Size end)
+          if ok and size then
+              if entry.baseSize == nil then
+                  if type(size) == "number" then
+                      entry.baseSize = size
+                  elseif size.X and size.Y then
+                      entry.baseSize = Vector2.new(size.X, size.Y)
+                  end
+              end
+              if type(entry.baseSize) == "number" then
+                  entry.d.Size = entry.baseSize * uiScale
+              elseif entry.baseSize then
+                  entry.d.Size = entry.baseSize * uiScale
+              end
+          end
+      end
+      border.Size = Vector2.new(drawW, drawH)
+  end
+  local function updateDrag(focused)
+      local value = ismouse2pressed()
+      local down = value == true or (type(value) == "number" and value ~= 0)
+      local x, y = cursor.X, cursor.Y
+      if not focused or not shown or type(x) ~= "number" or type(y) ~= "number" then
+          dragging = false
+      elseif down then
+          if lastPanelX and lastPanelY
+              and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+              and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
+              pcall(setrobloxinput, false)
+          end
+          if not rightWasDown and lastPanelX and lastPanelY
+              and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+              and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
+              dragging = true
+              dragOffsetX, dragOffsetY = x - lastPanelX, y - lastPanelY
+          end
+          if dragging then
+              panelX, panelY = x - dragOffsetX, y - dragOffsetY
+              positionPanel()
+          end
+      else
+          dragging = false
+      end
+      rightWasDown = down
+  end
+  local function updateFade(now)
+      local dt = math.max(0, now - fadeLastTime)
+      fadeLastTime = now
+      borderPhase = (borderPhase + dt * 2.4) % (math.pi * 2)
+      local pulse = (math.sin(borderPhase) + 1) / 2
+      local edgeLevel = 120 + 135 * pulse
+      local edgeColor = Color3.fromRGB(edgeLevel, 35, edgeLevel)
+      border.Color = edgeColor
+      accent.Color = edgeColor
+      local watermarkPulse = (math.sin(borderPhase) + 1) / 2
+      watermark.Color = Color3.new(
+          C.pink.R + (C.white.R - C.pink.R) * watermarkPulse,
+          C.pink.G + (C.white.G - C.pink.G) * watermarkPulse,
+          C.pink.B + (C.white.B - C.pink.B) * watermarkPulse
+      )
+      local target = shown and 1 or 0
+      if fadeAmount < target then
+          fadeAmount = math.min(target, fadeAmount + dt / FADE_SECONDS)
+      elseif fadeAmount > target then
+          fadeAmount = math.max(target, fadeAmount - dt / FADE_SECONDS)
+      end
+      for _, entry in ipairs(layout) do
+          local menuAlpha = 1
+          if npcMenuDrawings[entry.d] then
+              menuAlpha = npcMenuAnim
+              if npcMenuDrawings[entry.d] >= 480 then
+                  menuAlpha = menuAlpha * (npcSubOpen and 1 or 0)
+              end
+          elseif instantHintDrawings[entry.d] then
+              menuAlpha = 1 - npcMenuAnim
+          elseif totemMenu.drawings[entry.d] then
+              menuAlpha = totemMenu.anim
+          elseif islandMenu.drawings[entry.d] then
+              menuAlpha = islandMenu.anim
+          elseif entry.d == totemMenu.title or entry.d == totemMenu.arrow
+              or entry.d == islandMenu.title or entry.d == islandMenu.arrow then
+              menuAlpha = npcMenuAnim
+          elseif entry.d == menuBackdrop then
+              menuAlpha = math.max(npcMenuAnim, totemMenu.anim)
+          end
+          entry.d.Transparency = entry.opacity * fadeAmount * menuAlpha
+          entry.d.Visible = fadeAmount > 0.001 and menuAlpha > 0.001
+      end
+  end
+  local function display(message)
+      local key = tostring(enabled) .. castMode .. message
+      if lastDisplay == key then return end
+      lastDisplay = key
+      local color = C.green
+      if not enabled then
+          color = C.red
+      elseif message == "PREDICTING" then
+          color = C.blue
+      elseif message:find("CAST", 1, true) then
+          color = castMode == "Instant" and C.blue or C.green
+      elseif message == "EQUIPPING ROD" then
+          color = C.yellow
+      end
+      statusText.Text = message
+      statusText.Color = Color3.fromRGB(255, 255, 255)
+      accent.Color = color
+  end
+  local function mouse(value)
+      if held == value then return end
+      held = value
+      if value then
+          mouse1press()
+      else
+          mouse1release()
+          releaseAt = nil
+          castMeter, castFill, castGreen = nil, nil, nil
+      end
+  end
+  local function castReading()
+      if not castMeter then
+          local character = player.Character
+          local root = character and character:FindFirstChild("HumanoidRootPart")
+          local power = root and root:FindFirstChild("power")
+          castMeter = power and power:FindFirstChild("powerbar")
+          castFill = castMeter and castMeter:FindFirstChild("bar")
+          castGreen = castMeter and castMeter:FindFirstChild("green")
+      end
+      if not (castMeter and castFill and castGreen) then return nil end
+      local size, origin = castMeter.AbsoluteSize, castMeter.AbsolutePosition
+      local fillSize = castFill.AbsoluteSize
+      local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
+      if not (size and origin and fillSize and greenSize and greenPos)
+          or size.Y <= 0 or greenSize.Y <= 0 then return nil end
+      local amount = math.clamp(fillSize.Y / size.Y, 0, 1)
+      local lower = math.clamp(1 - (greenPos.Y + greenSize.Y - origin.Y) / size.Y, 0, 1)
+      local upper = math.clamp(1 - (greenPos.Y - origin.Y) / size.Y, 0, 1)
+      if upper <= lower then return nil end
+      local target = lower + (upper - lower) * 0.75
+      return amount * 100, amount >= target and amount <= upper
+  end
+  local function releaseKey()
+      if pendingKey then
+          keyrelease(pendingKey)
+          pendingKey = nil
+          keyReleaseAt = nil
+      end
+  end
+  local function tap(key, now)
+      if pendingKey or navigationReleaseAt
+          or now < navigationReadyAt then
+          return false
+      end
+      pendingKey = key
+      keyReleaseAt = now + KEY_HOLD
+      keypress(key)
+      return true
+  end
+  local function setNavigation(value)
+      navigationWanted = value
+      if navigationOn == value or navigationReleaseAt then
+          return
+      end
+      releaseKey()
+      keypress(0xDC)
+      navigationOn = value
+      navigationReleaseAt = tick() + KEY_HOLD
+      navigationReadyAt = navigationReleaseAt + 0.12
+  end
+  local function updateKeys(now)
+      if pendingKey and now >= keyReleaseAt then
+          releaseKey()
+      end
+      if navigationReleaseAt and now >= navigationReleaseAt then
+          keyrelease(0xDC)
+          navigationReleaseAt = nil
+      end
+      if not navigationReleaseAt
+          and navigationWanted ~= navigationOn then
+          setNavigation(navigationWanted)
+      end
+  end
+  local function resetTracking()
+      lastFish, lastBar, lastTime = nil, nil, nil
+      fishVelocity, barVelocity = 0, 0
+      fishMoving, quietTime = false, 0
+      activity = 0
+  end
+  local function teleportNpc(row)
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then npcStatus.Text = "Waiting for your character"; return end
+      local pos, live
+      if row.skipNpc then
+          pos = row.pos and Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+          live = false
+      else
+          local ok
+          ok, pos = pcall(findNpcPosition, row)
+          if not ok then pos = nil end
+          live = pos ~= nil
+          if not pos and row.pos then
+              pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+          end
+      end
+      if not pos then
+          npcStatus.Text = row.name .. ": not loaded"
+          return
+      end
+      local moved, err = pcall(function()
+          root.CFrame = CFrame.new(
+              pos.X,
+              pos.Y + (row.exactPosition and 0 or 2),
+              pos.Z + (row.exactPosition and 0 or 4)
+          )
+      end)
+      if not moved then
+          npcStatus.Text = "Teleport write failed"
+          warn("NPC teleport: " .. tostring(err))
+          return
+      end
+      task.spawn(function()
+          for _ = 1, 6 do
+              if not alive or not root or not root.Parent then return end
+              pcall(function()
+                  root.CFrame = CFrame.new(
+                      pos.X,
+                      pos.Y + (row.exactPosition and 0 or 2),
+                      pos.Z + (row.exactPosition and 0 or 4)
+                  )
+              end)
+              task.wait(0.05)
+          end
+      end)
+      npcStatus.Text = row.name .. (live and ": moved" or ": map location")
+  end
+  local function resizePanel(delta)
+      uiScale = math.clamp(uiScale + delta, MIN_UI_SCALE, MAX_UI_SCALE)
+      positionPanel()
+  end
+  local function layoutTeleportMenus()
+      totemMenu.top = 388 + (npcSubOpen and 368 or 95) * npcMenuAnim
+      islandMenu.top = totemMenu.top + 48 + 221 * (totemMenu.open and 1 or 0)
+      npcArrow.Text = npcMenuOpen and "^" or "v"
+      npcSubArrow.Text = npcSubOpen and "^" or "v"
+      totemMenu.arrow.Text = totemMenu.open and "^" or "v"
+      islandMenu.arrow.Text = islandMenu.open and "^" or "v"
+      PANEL_H = islandMenu.top + 32 + 221 * islandMenu.anim
+      for _, entry in ipairs(layout) do
+          if entry.d == bg or entry.d == border then
+              entry.baseSize = Vector2.new(PANEL_W, PANEL_H)
+          end
+      end
+      local backdropHeight = math.max(0, PANEL_H - 388)
+      menuBackdropLayout.y = 388
+      menuBackdropLayout.baseSize = Vector2.new(PANEL_W, backdropHeight)
+      menuBackdrop.Visible = math.max(npcMenuAnim, totemMenu.anim) > 0.001
+      for _, entry in ipairs(layout) do
+          if entry.d == totemMenu.title then
+              entry.y = totemMenu.top + 8
+          elseif entry.d == totemMenu.arrow then
+              entry.y = totemMenu.top + 6
+          elseif entry.d == islandMenu.title then
+              entry.y = islandMenu.top + 8
+          elseif entry.d == islandMenu.arrow then
+              entry.y = islandMenu.top + 6
+          elseif islandMenu.drawings[entry.d] then
+              entry.y = islandMenu.top + islandMenu.drawings[entry.d]
+                  - (1 - islandMenu.anim) * 6
+          elseif npcMenuDrawings[entry.d] then
+              entry.y = npcMenuDrawings[entry.d] - (1 - npcMenuAnim) * 6
+          elseif instantHintDrawings[entry.d] then
+              entry.y = instantHintDrawings[entry.d] - (1 - npcMenuAnim) * 6
+          elseif totemMenu.drawings[entry.d] then
+              entry.y = totemMenu.top + totemMenu.drawings[entry.d]
+                  - (1 - totemMenu.anim) * 6
+          end
+      end
+      for i, d in ipairs(totemMenu.slots) do
+          local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + i]
+          d.Text = row and row.name or ""
+      end
+      totemMenu.pageLabel.Text = totemMenu.page .. " / "
+          .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
+      for i, d in ipairs(islandMenu.slots) do
+          local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + i]
+          d.Text = row and row.name or ""
+          for _, entry in ipairs(layout) do
+              if entry.d == d then
+                  entry.y = islandMenu.top + 38 + (i - 1) * 27
+                  break
+              end
+          end
+      end
+      islandMenu.pageLabel.Text = islandMenu.page .. " / "
+          .. math.ceil(#islandMenu.rows / islandMenu.pageSize)
+      panelX, panelY = lastPanelX, lastPanelY
+      lastPanelX, lastPanelY = nil, nil
+      positionPanel()
+  end
+  local function updateDropdownAnimation(now)
+      local dt = math.max(0, math.min(0.05, now - dropdownAnimLast))
+      dropdownAnimLast = now
+      local npcTarget = npcMenuOpen and 1 or 0
+      local totemTarget = totemMenu.open and 1 or 0
+      local islandTarget = islandMenu.open and 1 or 0
+      local blend = 1 - math.exp(-dt * 24)
+      npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
+      totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
+      islandMenu.anim = islandMenu.anim + (islandTarget - islandMenu.anim) * blend
+      if math.abs(npcMenuAnim - npcTarget) < 0.002 then
+          npcMenuAnim = npcTarget
+      end
+      if math.abs(totemMenu.anim - totemTarget) < 0.002 then
+          totemMenu.anim = totemTarget
+      end
+      if math.abs(islandMenu.anim - islandTarget) < 0.002 then
+          islandMenu.anim = islandTarget
+      end
+      layoutTeleportMenus()
+  end
+  local function teleportTotem(row)
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then totemMenu.status.Text = "Waiting for your character"; return end
+      local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local live = false
+      pcall(function()
+          local targetName = npcName(row.match or row.name) .. "totem"
+          for _, object in ipairs(W:GetDescendants()) do
+              if npcName(object.Name) == targetName then
+                  local node, heldTool = object, false
+                  while node and node ~= W do
+                      if node.ClassName == "Tool" then heldTool = true; break end
+                      node = node.Parent
+                  end
+                  if not heldTool then
+                      local part
+                      if object:IsA("BasePart") then part = object
+                      elseif object.ClassName == "Model" then
+                          part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+                      end
+                      if part and (part.Position - pos).Magnitude < 200 then
+                          pos, live = part.Position, true
+                          break
+                      end
+                  end
+              end
+          end
+      end)
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z + 3)
+      end)
+      totemMenu.status.Text = ok and (live and "At shop display; buy manually" or "At mapped shop; buy manually")
+          or "Teleport write failed"
+      if not ok then warn("Totem teleport: " .. tostring(err)) end
+  end
+  local function findIslandPosition(row)
+      if not row.match then return nil end
+      for _, object in ipairs(W:GetDescendants()) do
+          local normalized = npcName(object.Name)
+          for _, alias in ipairs(row.match) do
+              if normalized == alias then
+                  local part
+                  if object:IsA("BasePart") then
+                      part = object
+                  elseif object.ClassName == "Model" then
+                      part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+                  end
+                  if part then return part.Position end
+              end
+          end
+      end
+  end
+  local function teleportIsland(row)
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then islandMenu.status.Text = "Waiting for your character"; return end
+      local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local live = false
+      local okFind, livePos = pcall(findIslandPosition, row)
+      if okFind and livePos then pos, live = livePos, true end
+      local offset = row.offset or {0, 0, 0}
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
+      end)
+      islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
+      if ok then
+          task.spawn(function()
+              for _ = 1, 6 do
+                  if not alive or not root or not root.Parent then return end
+                  pcall(function()
+                      root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
+                  end)
+                  task.wait(0.05)
+              end
+          end)
+      end
+      if not ok then warn("Island teleport: " .. tostring(err)) end
+  end
+  local function updateCustomGpsDisplay()
+      if not customGpsFallbackText then return end
+      customGpsFallbackText.Text = customGpsText ~= "" and customGpsText
+          or "(type GPS cords here)"
+      customGpsFallbackText.Color = customGpsText ~= "" and C.white or C.muted
+  end
+  local function updateCustomGpsTyping()
+      if not customGpsEditing then return end
+      local ctrl = iskeypressed(0x11) == true
+      local paste = iskeypressed(0x56) == true
+      if ctrl and paste and not customGpsKeys[0x100] then
+          local getter = type(getclipboard) == "function" and getclipboard
+              or type(get_clipboard) == "function" and get_clipboard
+              or type(readclipboard) == "function" and readclipboard
+          if getter then
+              local ok, value = pcall(getter)
+              if ok then customGpsText = tostring(value or "") end
+          end
+      end
+      customGpsKeys[0x100] = ctrl and paste
+      local keys = {
+          [0x30] = "0", [0x31] = "1", [0x32] = "2", [0x33] = "3", [0x34] = "4",
+          [0x35] = "5", [0x36] = "6", [0x37] = "7", [0x38] = "8", [0x39] = "9",
+          [0xBC] = ",", [0xBE] = ".", [0xBD] = "-", [0x20] = " ",
+          [0x60] = "0", [0x61] = "1", [0x62] = "2", [0x63] = "3", [0x64] = "4",
+          [0x65] = "5", [0x66] = "6", [0x67] = "7", [0x68] = "8", [0x69] = "9",
+          [0x6E] = ".", [0x6D] = "-",
+      }
+      for code, character in pairs(keys) do
+          local down = iskeypressed(code) == true
+          if down and not customGpsKeys[code] then customGpsText = customGpsText .. character end
+          customGpsKeys[code] = down
+      end
+      local backspace = iskeypressed(0x08) == true
+      if backspace and not customGpsKeys[0x08] then
+          customGpsText = customGpsText:sub(1, math.max(0, #customGpsText - 1))
+      end
+      customGpsKeys[0x08] = backspace
+      local enter = iskeypressed(0x0D) == true
+      if enter and not customGpsKeys[0x0D] then
+          customGpsEditing = false
+          pcall(setrobloxinput, true)
+      end
+      customGpsKeys[0x0D] = enter
+      updateCustomGpsDisplay()
+  end
+  local function teleportCustomGps()
+      enabled, equipPending = false, false
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      resetTracking()
+      local text = customGpsText
+      customGpsEditing = false
+      pcall(setrobloxinput, true)
+      local numbers = {}
+      for value in text:gmatch("[%-+]?%d+%.?%d*") do
+          numbers[#numbers + 1] = tonumber(value)
+          if #numbers == 3 then break end
+      end
+      local x, y, z = numbers[1], numbers[2], numbers[3]
+      if not (x and y and z) then
+          npcStatus.Text = "Enter three GPS numbers in the GPS box"
+          return
+      end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then npcStatus.Text = "Waiting for your character"; return end
+      local ok, err = pcall(function()
+          root.CFrame = CFrame.new(x, y + 3, z + 3)
+      end)
+      npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", x, y, z)
+          or "Teleport write failed"
+      if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
+  end
+  customGpsFallbackBox = add("Square", 14, 397)
+  customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
+  customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
+  customGpsFallbackBox.Filled = true
+  customGpsFallbackBox.Visible = false
+  npcMenuDrawings[customGpsFallbackBox] = 397
+  customGpsFallbackText = label("(type GPS cords here)", 20, 402, 10)
+  customGpsFallbackText.Color = C.muted
+  customGpsFallbackText.Visible = false
+  npcMenuDrawings[customGpsFallbackText] = 397
+  customGpsFallbackButton = label("GPS Teleport", 88, 428, 12)
+  customGpsFallbackButton.Color = Color3.fromRGB(90, 255, 130)
+  customGpsFallbackButton.Visible = false
+  npcMenuDrawings[customGpsFallbackButton] = 425
+  local function updatePanelInput(focused)
+      local x, y = cursor.X, cursor.Y
+      local inside = focused and shown and lastPanelX and lastPanelY
+          and type(x) == "number" and type(y) == "number"
+          and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
+          and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
+      local capture = focused and shown and (inside or dragging)
+      if capture and not panelInputCaptured then
+          mouse(false)
+          releaseKey()
+          if navigationReleaseAt then
+              keyrelease(0xDC)
+              navigationReleaseAt = nil
+          end
+          navigationWanted = navigationOn
+          setrobloxinput(false)
+          panelInputCaptured = true
+      elseif not capture then
+          releasePanelInput()
+      end
+      local value = ismouse1pressed()
+      local down = value == true or (type(value) == "number" and value ~= 0)
+      local localX = inside and (x - lastPanelX) / uiScale or 0
+      local localY = inside and (y - lastPanelY) / uiScale or 0
+      updateCustomGpsTyping()
+      if customGpsEditing and inside and down and not leftWasDown
+          and not (localY >= 397 and localY < 425) then
+          customGpsEditing = false
+          pcall(setrobloxinput, true)
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 311 and localY <= 337 then
+          castMode = castMode == "Perfect" and "Instant" or "Perfect"
+          castModeText.Text = castMode .. " cast"
+          castModeText.Color = castMode == "Instant" and C.instantOff or C.green
+          lastDisplay = ""
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localY >= 5 and localY <= 35 then
+          if localX >= PANEL_W - 58 and localX <= PANEL_W - 34 then
+              resizePanel(-UI_SCALE_STEP)
+          elseif localX >= PANEL_W - 33 and localX <= PANEL_W - 5 then
+              resizePanel(UI_SCALE_STEP)
+          end
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 287 and localY <= 313 then
+          toggleInstant()
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 263 and localY <= 285 then
+          toggleMacro()
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 337 and localY <= 356 then
+          toggleHarpoonPull()
+      end
+      if inside and not dragging and down and not leftWasDown then
+          if localY >= 357 and localY <= 387 then
+              npcMenuOpen = not npcMenuOpen
+              if npcMenuOpen then
+                  totemMenu.open, islandMenu.open = false, false
+              else
+                  totemMenu.open, islandMenu.open = false, false
+                  customGpsEditing = false
+              end
+              layoutTeleportMenus()
+          elseif npcMenuOpen and localY >= 397 and localY < 425 then
+              customGpsEditing = true
+              customGpsKeys = {}
+              pcall(setrobloxinput, false)
+              updateCustomGpsDisplay()
+          elseif npcMenuOpen and localY >= 452 and localY < 480 then
+              npcSubOpen = not npcSubOpen
+              layoutTeleportMenus()
+          elseif npcMenuOpen and localY >= 425 and localY < 452 then
+              teleportCustomGps()
+          elseif npcMenuOpen and localY >= islandMenu.top and localY < islandMenu.top + 32 then
+              islandMenu.open = not islandMenu.open
+              if islandMenu.open then
+                  totemMenu.open = false
+                  totemMenu.anim = 0
+              end
+              layoutTeleportMenus()
+          elseif npcMenuOpen and localY >= totemMenu.top and localY < totemMenu.top + 32 then
+              totemMenu.open = not totemMenu.open
+              if totemMenu.open then
+                  islandMenu.open = false
+                  islandMenu.anim = 0
+              end
+              layoutTeleportMenus()
+          elseif npcMenuOpen and islandMenu.open then
+              local offset = localY - islandMenu.top
+              if offset >= 198 and offset < 224 then
+                  local pages = math.ceil(#islandMenu.rows / islandMenu.pageSize)
+                  if localX < 95 then islandMenu.page = math.max(1, islandMenu.page - 1)
+                  elseif localX > 190 then islandMenu.page = math.min(pages, islandMenu.page + 1) end
+                  layoutTeleportMenus()
+              elseif offset >= 32 and offset < 32 + islandMenu.pageSize * 27 then
+                  local slot = math.floor((offset - 32) / 27) + 1
+                  local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + slot]
+                  if row then teleportIsland(row) end
+              end
+          elseif npcMenuOpen and totemMenu.open then
+              local offset = localY - totemMenu.top
+              if offset >= 198 and offset < 224 then
+                  local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
+                  if localX < 95 then totemMenu.page = math.max(1, totemMenu.page - 1)
+                  elseif localX > 190 then totemMenu.page = math.min(pages, totemMenu.page + 1) end
+                  layoutTeleportMenus()
+              elseif offset >= 32 and offset < 32 + totemMenu.pageSize * 27 then
+                  local slot = math.floor((offset - 32) / 27) + 1
+                  local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + slot]
+                  if row then teleportTotem(row) end
+              end
+          elseif npcMenuOpen and x >= lastPanelX + 12 and x <= lastPanelX + PANEL_W - 12 then
+              for _, row in ipairs(npcRows) do
+                  if localY >= row.y and localY < row.y + 27 then
+                      teleportNpc(row)
+                      break
+                  end
+              end
+          end
+      end
+      leftWasDown = down
+  end
+  local function numberValue(parent, name)
+      local child = parent and parent:FindFirstChild(name)
+      if not child then return nil end
+      local class = child.ClassName
+      if class ~= "NumberValue" and class ~= "IntValue" then
+          return nil
+      end
+      local value = child.Value
+      if type(value) == "number"
+          and value == value
+          and math.abs(value) < math.huge then
+          return value
+      end
+      return nil
+  end
+  local function equippedRod()
+      local character = player.Character
+      if not character then return nil end
+      for _, tool in ipairs(character:GetChildren()) do
+          if tool.ClassName == "Tool" then
+              local events = tool:FindFirstChild("events")
+              local cast = events and events:FindFirstChild("castAsync")
+              if cast and cast.ClassName == "RemoteFunction" then
+                  return tool
+              end
+          end
+      end
+      return nil
+  end
+  local function catches()
+      local stats = W:FindFirstChild("PlayerStats")
+      local mine = stats and stats:FindFirstChild(player.Name)
+      local t = mine and mine:FindFirstChild("T")
+      local record = t and t:FindFirstChild(player.Name)
+      local values = record and record:FindFirstChild("Stats")
+      return numberValue(values, "tracker_fishcaught")
+  end
+  local function updateSession(now)
+      if not enabled then return end
+      elapsed = now - started
+      local current = catches()
+      if current then
+          if not catchBase then catchBase = current end
+          sessionCaught = math.max(0, current - catchBase)
+      end
+  end
+  local function mult(value)
+      return value and string.format("%gx", value) or "?"
+  end
+  local function serverClock()
+      local minutes = Lighting:GetAttribute("CurrentTime")
+      if type(minutes) ~= "number" then return "?" end
+      minutes = minutes % 1440
+      local hour = math.floor(minutes / 60)
+      local minute = math.floor(minutes % 60)
+      local suffix = hour >= 12 and "PM" or "AM"
+      local displayHour = hour % 12
+      if displayHour == 0 then displayHour = 12 end
+      return string.format("%d:%02d %s", displayHour, minute, suffix)
+  end
+  local function cleanText(value)
+      if type(value) ~= "string" then return nil end
+      value = value:gsub("<[bB][rR]%s*/?>", "\n")
+      value = value:gsub("<[^>]*>", "")
+      value = value:gsub("&times;", "x")
+      value = value:gsub("Ã—", "x")
+      value = value:gsub("&nbsp;", " ")
+      value = value:gsub("&amp;", "&")
+      value = value:gsub("\r", "")
+      value = value:match("^%s*(.-)%s*$")
+      local lower = value:lower()
+      if value == ""
+          or lower == "none"
+          or lower == "nil"
+          or lower == "false"
+          or lower == "weather status"
+          or lower == "failed to fetch text" then
+          return nil
+      end
+      if value:find("[%z\1-\8\11\12\14-\31]")
+          or value:find("ï¿½", 1, true) then
+          return nil
+      end
+      return value
+  end
+  local function normalized(value)
+      return (cleanText(value) or ""):lower()
+  end
+  local function readEnvironment()
+      gui = player and player:FindFirstChild("PlayerGui") or gui
+      world = RS and RS:FindFirstChild("world") or nil
+      local events, descriptions = {}, {}
+      local seenEvents, seenDescriptions = {}, {}
+      local function describe(value)
+          value = cleanText(value)
+          if not value then return end
+          local key = value:lower()
+          if not seenDescriptions[key] then
+              seenDescriptions[key] = true
+              descriptions[#descriptions + 1] = value
+          end
+      end
+      local function include(value)
+          value = cleanText(value)
+          if not value then return end
+          describe(value)
+          local title = value:match("[^\n]+") or value
+          local key = title:lower():gsub("%s+", " ")
+          local index = seenEvents[key]
+          if not index then
+              events[#events + 1] = value
+              seenEvents[key] = #events
+          elseif #value > #events[index] then
+              events[index] = value
+          end
+      end
+      local hud = gui and gui:FindFirstChild("hud")
+      local safe = hud and hud:FindFirstChild("safezone")
+      local statuses = safe and safe:FindFirstChild("worldstatuses")
+      if statuses then
+          for _, entry in ipairs(statuses:GetChildren()) do
+              local name = entry.Name:lower()
+              local readable = false
+              if not name:find("cycle", 1, true)
+                  and not name:find("season", 1, true) then
+                  for _, item in ipairs(entry:GetDescendants()) do
+                      if item.ClassName == "TextLabel"
+                          and item.Name:lower():find("tooltip", 1, true) then
+                          local current = item:GetAttribute("CurrentText")
+                          local text = cleanText(current) or cleanText(item.Text)
+                          if text then
+                              include(text)
+                              readable = true
+                          end
+                      end
+                  end
+                  if not readable and entry.ClassName == "Frame" then
+                      if name:match("^event%d+$") then
+                          include("Server event (name unavailable)")
+                      elseif name:match("^adminevent%d+$") then
+                          include("Admin event (name unavailable)")
+                      elseif name:match("^localizedevent%d+$") then
+                          include("Local event (name unavailable)")
+                      end
+                  end
+              end
+          end
+      end
+      local function includeName(value)
+          value = cleanText(value)
+          if not value then return end
+          include(value)
+      end
+      for _, name in ipairs({
+          "weather", "clientWeather", "event", "admin_event", "AdminEventText"
+      }) do
+          local slot = world and world:FindFirstChild(name)
+          if slot then
+              if slot.ClassName == "StringValue" then
+                  includeName(slot.Value)
+              end
+              for _, group in ipairs(slot:GetDescendants()) do
+                  if group.ClassName == "StringValue" then
+                      includeName(group.Value)
+                  end
+              end
+          end
+      end
+      local active = W:FindFirstChild("active")
+      local constant = active and active:FindFirstChild("constant")
+      local aurora = constant and constant:FindFirstChild("Aurora Borealis")
+      if aurora and aurora.ClassName == "Model" then
+          local effect = aurora:FindFirstChild("Aurora Borealis")
+          local beam = effect and effect:FindFirstChild("beam")
+          if beam and beam.ClassName == "Beam" then
+              includeName("Aurora Borealis")
+          end
+      end
+      for _, entry in ipairs({
+          {"meteor_active", "Meteor"},
+          {"blizzard_active", "Blizzard"},
+      }) do
+          local flag = world and world:FindFirstChild(entry[1])
+          if flag and flag.ClassName == "BoolValue" and flag.Value == true then
+              includeName(entry[2])
+          end
+      end
+      local boostsGui = gui and gui:FindFirstChild("CurrentServerBoosts")
+      local boosts = boostsGui and boostsGui:FindFirstChild("boosts")
+      if boosts then
+          for _, entry in ipairs(boosts:GetChildren()) do
+              local title = entry:FindFirstChild("Title")
+              local amount = entry:FindFirstChild("length")
+              local titleValue = title
+                  and title.ClassName == "TextLabel"
+                  and cleanText(title.Text)
+              local amountValue = amount
+                  and amount.ClassName == "TextLabel"
+                  and cleanText(amount.Text)
+              if titleValue and amountValue then
+                  describe(titleValue .. " " .. amountValue)
+              end
+              for _, item in ipairs(entry:GetDescendants()) do
+                  if item.ClassName == "TextLabel" then
+                      local value = cleanText(item.Text)
+                      if value then
+                          local lower = value:lower()
+                          if lower:find("luck", 1, true)
+                              or lower:find("shiny", 1, true)
+                              or lower:find("sparkling", 1, true)
+                              or lower:find("mutation", 1, true) then
+                              describe(value)
+                          end
+                      end
+                  end
+              end
+          end
+      end
+      local function priority(value)
+          local n = value:lower()
+          if n:find("admin", 1, true)
+              or n:find("aurora", 1, true)
+              or n:find("tropical", 1, true)
+              or n:find("rainbow", 1, true) then
+              return 1
+          end
+          if n:find("shiny", 1, true)
+              or n:find("sparkling", 1, true)
+              or n:find("mutation", 1, true) then
+              return 2
+          end
+          return 3
+      end
+      table.sort(events, function(a, b)
+          local pa, pb = priority(a), priority(b)
+          if pa == pb then return a < b end
+          return pa < pb
+      end)
+      return events, descriptions
+  end
+  local function advertisedPercent(descriptions, stat)
+      local values, seen = {}, {}
+      for _, description in ipairs(descriptions) do
+          for line in normalized(description):gmatch("[^\n]+") do
+              local patterns = {
+                  stat .. "%s+chance%s*[:=]?%s*([+%-]?%d+%.?%d*)%s*%%",
+                  "([+%-]?%d+%.?%d*)%s*%%%s+" .. stat .. "%s+chance",
+                  stat .. "%s*[:=]%s*([+%-]?%d+%.?%d*)%s*%%",
+              }
+              for _, pattern in ipairs(patterns) do
+                  local raw = line:match(pattern)
+                  local value = raw and tonumber(raw)
+                  if value and math.abs(value) <= 100 then
+                      local sign = raw:sub(1, 1) == "+" and "+" or ""
+                      local text = sign .. string.format("%g%%", value)
+                      if not seen[text] then
+                          seen[text] = true
+                          values[#values + 1] = text
+                      end
+                  end
+              end
+          end
+      end
+      return #values > 0 and table.concat(values, "/") or nil
+  end
+  local function advertisedLuck(descriptions, scope)
+      local found
+      for _, description in ipairs(descriptions) do
+          local text = normalized(description)
+          local raw =
+              text:match(scope .. "%s+luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
+              or text:match(scope .. "%s+luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
+              or text:match("(%d+%.?%d*)%s*x%s+" .. scope .. "%s+luck")
+          local value = raw and tonumber(raw)
+          if value and value > 0 then
+              if found and found ~= value then
+                  return nil, true
+              end
+              found = value
+          end
+      end
+      return found, false
+  end
+  local function eventLuck(events)
+      local values, seen = {}, {}
+      for _, description in ipairs(events) do
+          local text = normalized(description)
+          if not text:find("server", 1, true)
+              and not text:find("global", 1, true) then
+              local raw =
+                  text:match("(%d+%.?%d*)%s*x%s+luck")
+                  or text:match("luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
+                  or text:match("luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
+              local value = raw and tonumber(raw)
+              if value and value > 0 then
+                  local textValue = string.format("%gx", value)
+                  if not seen[textValue] then
+                      seen[textValue] = true
+                      values[#values + 1] = textValue
+                  end
+              end
+          end
+      end
+      return #values > 0 and table.concat(values, "/") or nil
+  end
+  local function advertisedEffectMultipliers(descriptions, stat)
+      local values, seen = {}, {}
+      for _, description in ipairs(descriptions) do
+          for line in normalized(description):gmatch("[^\n]+") do
+              local patterns = {
+                  "(%d+%.?%d*)%s*x%s+" .. stat,
+                  "x%s*(%d+%.?%d*)%s+" .. stat,
+                  stat .. "%s+chance%s*[:=]?%s*x%s*(%d+%.?%d*)",
+                  stat .. "%s+chance%s*[:=]?%s*(%d+%.?%d*)%s*x",
+                  stat .. "%s*[:=]%s*x%s*(%d+%.?%d*)",
+                  stat .. "%s*[:=]%s*(%d+%.?%d*)%s*x",
+              }
+              for _, pattern in ipairs(patterns) do
+                  local raw = line:match(pattern)
+                  local value = raw and tonumber(raw)
+                  if value and value > 0 then
+                      local textValue = string.format("%gx", value)
+                      if not seen[textValue] then
+                          seen[textValue] = true
+                          values[#values + 1] = textValue
+                      end
+                  end
+              end
+          end
+      end
+      return values
+  end
+  local function effectText(descriptions, stat, valueName)
+      local multiplier = numberValue(world, valueName)
+      local percent = advertisedPercent(descriptions, stat)
+      local advertised = advertisedEffectMultipliers(descriptions, stat)
+      local parts = {}
+      if multiplier then
+          parts[#parts + 1] = string.format("%gx", multiplier)
+      end
+      local extras = {}
+      local baseText = multiplier and string.format("%gx", multiplier)
+      for _, value in ipairs(advertised) do
+          if value ~= baseText then
+              extras[#extras + 1] = value
+          end
+      end
+      if #extras > 0 then
+          parts[#parts + 1] = "E:" .. table.concat(extras, "/")
+      end
+      if percent then
+          parts[#parts + 1] = percent
+      end
+      return #parts > 0 and table.concat(parts, " ") or "?"
+  end
+  local function environmentText(events, now)
+      if #events == 0 then
+          eventHeading.Text = "WEATHER / EVENTS"
+          eventHeadingOutlineLeft.Text = eventHeading.Text
+          eventHeadingOutlineRight.Text = eventHeading.Text
+          eventHeadingOutlineUp.Text = eventHeading.Text
+          eventHeadingOutlineDown.Text = eventHeading.Text
+          return "Unavailable"
+      end
+      local perPage = 6
+      local pages = math.ceil(#events / perPage)
+      local page = math.floor(now / EVENT_SCROLL_SECONDS) % pages
+      local first = page * perPage + 1
+      local last = math.min(first + perPage - 1, #events)
+      eventHeading.Text = string.format(
+          "WEATHER / EVENTS  %d ACTIVE%s", #events,
+          pages > 1 and string.format("  %d/%d", page + 1, pages) or ""
+      )
+      eventHeadingOutlineLeft.Text = eventHeading.Text
+      eventHeadingOutlineRight.Text = eventHeading.Text
+      eventHeadingOutlineUp.Text = eventHeading.Text
+      eventHeadingOutlineDown.Text = eventHeading.Text
+      local lines = {}
+      for i = first, last do
+          local title = events[i]:match("[^\n]+") or events[i]
+          lines[#lines + 1] = title
+      end
+      return table.concat(lines, "\n")
+  end
+  local function fitText(d, text, normalSize)
+      d.Text = text
+      d.Size = normalSize * uiScale
+      local bounds = d.TextBounds
+      local available = (PANEL_W - 28) * uiScale
+      if bounds and bounds.X > available then
+          d.Size = math.max(
+              9 * uiScale, math.floor(normalSize * uiScale * available / bounds.X)
+          )
+      end
+  end
+  local function refreshStats(now)
+      updateSession(now)
+      positionPanel()
+      local seconds = math.floor(elapsed)
+      timerText.Text = string.format(
+          "Runtime   %02d:%02d:%02d",
+          math.floor(seconds / 3600),
+          math.floor(seconds / 60) % 60,
+          seconds % 60
+      )
+      fishText.Text = "Caught    "
+          .. (sessionCaught and tostring(sessionCaught) or "--")
+      clockText.Text = "Server    " .. serverClock()
+      if now >= nextEnvironment then
+          cachedEvents, cachedDescriptions = readEnvironment()
+          nextEnvironment = now + ENVIRONMENT_INTERVAL
+      end
+      local serverLuck, serverConflict =
+          advertisedLuck(cachedDescriptions, "server")
+      local globalLuck, globalConflict =
+          advertisedLuck(cachedDescriptions, "global")
+      if not serverLuck and not serverConflict then
+          serverLuck = numberValue(world, "luck_Server")
+      end
+      if not globalLuck and not globalConflict then
+          globalLuck = numberValue(world, "luck_Luck")
+      end
+      local eventMultiplier = eventLuck(cachedEvents)
+      fitText(weatherText, environmentText(cachedEvents, now), 12)
+  end
+  local function disableInstant()
+      instantGeneration = instantGeneration + 1
+      instantEnabled, instantLoading = false, false
+      if instantCache then
+          local ok, err = pcall(applygc, instantCache,
+              "progressefficiency", instantOriginal or 1)
+          if not ok then warn("Instant Catch reset: " .. tostring(err)) end
+      end
+      instantCache, instantOriginal = nil, nil
+      updateInstantLabel()
+  end
+  toggleInstant = function()
+      if instantEnabled or instantLoading then
+          disableInstant()
+          return
+      end
+      if type(getgc) ~= "function" or type(applygc) ~= "function" then
+          warn("Instant Catch requires Matcha getgc / applygc")
+          return
+      end
+      instantGeneration = instantGeneration + 1
+      local generation = instantGeneration
+      instantLoading = true
+      updateInstantLabel()
+      task.spawn(function()
+          local ok, cache = pcall(getgc, {"progressefficiency"})
+          if not alive or generation ~= instantGeneration then return end
+          instantLoading = false
+          if not ok or not cache then
+              updateInstantLabel()
+              warn("Instant Catch: progress cache unavailable")
+              return
+          end
+          local original = cache.progressefficiency
+          if type(original) ~= "number" or original ~= original
+              or math.abs(original) == math.huge then
+              original = 1 -- Default reset value; never gate enabling on this read.
+          end
+          instantCache, instantOriginal = cache, original
+          instantEnabled = true
+          nextInstant = 0
+          updateInstantLabel()
+      end)
+  end
+  toggleMacro = function()
+      updateSession(tick())
+      enabled = not enabled
+      macroText.Text = enabled and "Macro ON" or "Macro OFF"
+      macroText.Color = enabled and C.instantOn or C.instantOff
+      equipPending = enabled and equippedRod() == nil
+      equipReadyAt = 0
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      recoveryStage = 0
+      nextCast = tick()
+      wasReeling = false
+      resetTracking()
+      if enabled then
+          started, elapsed = tick(), 0
+          catchBase = catches()
+          sessionCaught = catchBase and 0 or nil
+      end
+      nextStats = 0
+      nextEnvironment = 0
+  end
+  toggleHarpoonPull = function()
+      harpoonPullEnabled = not harpoonPullEnabled
+      if not harpoonPullEnabled then
+          harpoonNextClickAt = 0
+          harpoonReadyAt = 0
+      end
+      harpoonPullText.Text = harpoonPullEnabled and "Harpoon Pull ON" or "Harpoon Pull OFF"
+      harpoonPullText.Color = harpoonPullEnabled and C.instantOn or C.instantOff
+  end
+  local function requestHarpoonToggle()
+      local now = tick()
+      if now - harpoonToggleLast < 0.20 then return end
+      harpoonToggleLast = now
+      toggleHarpoonPull()
+  end
+  pcall(function()
+      table.insert(inputConnections, UserInputService.InputBegan:Connect(function(input, processed)
+          if not processed and (input.KeyCode == 219 or input.KeyCode == 26) then
+              requestHarpoonToggle()
+          end
+      end))
+  end)
+  local function updateInstant(now, focused)
+      if not instantEnabled or not focused or now < nextInstant then return end
+      nextInstant = now + 0.05
+      local currentGui = player:FindFirstChild("PlayerGui")
+      local reel = currentGui and currentGui:FindFirstChild("reel")
+      local character = player.Character
+      local harpoon = character and (character:GetAttribute("HarpoonMinigameActive")
+          or character:GetAttribute("HarpoonMinigame"))
+      if reel and not harpoon then
+          local ok, err = pcall(applygc, instantCache, "progressefficiency", 500)
+          if not ok then
+              disableInstant()
+              warn("Instant Catch stopped: " .. tostring(err))
+          end
+      end
+  end
+  local function stop()
+      if not alive then return end
+      alive, enabled = false, false
+      disableInstant()
+      equipPending = false
+      dragging = false
+      releasePanelInput()
+      mouse(false)
+      releaseKey()
+      if navigationReleaseAt then
+          keyrelease(0xDC)
+          navigationReleaseAt = nil
+      end
+      if isrbxactive() and navigationOn then
+          navigationOn = false
+          navigationWanted = false
+          keypress(0xDC)
+          task.spawn(function()
+              task.wait(KEY_HOLD)
+              keyrelease(0xDC)
+          end)
+      end
+      for _, connection in ipairs(inputConnections) do
+          pcall(function() connection:Disconnect() end)
+      end
+      for _, d in ipairs(drawings) do
+          d:Remove()
+      end
+      _G.StopFischMacro = nil
+  end
+  _G.StopFischMacro = stop
+  local function edge(key)
+      local value = iskeypressed(key)
+      local current = value == true
+          or (type(value) == "number" and value ~= 0)
+      local pressed = current and not previous[key]
+      previous[key] = current
+      return pressed
+  end
+  local function track(bar, fish, playerbar, now)
+      local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
+      local fp, fs = fish.AbsolutePosition, fish.AbsoluteSize
+      local bp, bs = playerbar.AbsolutePosition, playerbar.AbsoluteSize
+      if not (origin and size and fp and fs and bp and bs)
+          or size.X <= 0 then
+          mouse(false)
+          resetTracking()
+          return false
+      end
+      local f = (fp.X + fs.X / 2 - origin.X) / size.X
+      local b = (bp.X + bs.X / 2 - origin.X) / size.X
+      local width = bs.X / size.X
+      if f ~= f or b ~= b or width <= 0
+          or math.abs(f) > 5 or math.abs(b) > 5 then
+          mouse(false)
+          resetTracking()
+          return false
+      end
+      local dt = lastTime and now - lastTime or 0
+      if dt > 0 and dt < 0.2 then
+          local rawFish = math.clamp((f - lastFish) / dt, -3, 3)
+          local rawBar = math.clamp((b - lastBar) / dt, -3, 3)
+          local fa = 1 - math.exp(-dt / 0.035)
+          local ba = 1 - math.exp(-dt / 0.018)
+          if rawFish * fishVelocity < 0 then
+              fishVelocity = 0
+          end
+          fishVelocity += (rawFish - fishVelocity) * fa
+          barVelocity += (rawBar - barVelocity) * ba
+          local speed = math.abs(fishVelocity)
+          local smoothing = speed > activity and 0.04 or 0.30
+          local aa = 1 - math.exp(-dt / smoothing)
+          activity += (speed - activity) * aa
+          if math.abs(rawFish) > 0.04 then
+              fishMoving, quietTime = true, 0
+          elseif math.abs(rawFish) < 0.015 then
+              quietTime += dt
+              if quietTime >= 0.06 then
+                  fishMoving = false
+                  fishVelocity = 0
+              end
+          else
+              quietTime = 0
+          end
+      else
+          fishVelocity, barVelocity = 0, 0
+          fishMoving, quietTime = false, 0
+          activity = 0
+      end
+      lastFish, lastBar, lastTime = f, b, now
+      local fast = math.clamp((activity - 0.06) / 0.24, 0, 1)
+      local target, feedForward = f, 0
+      if fishMoving then
+          local limit = math.min(width * 0.12, 0.025)
+          local predictionTime = 0.015 + 0.030 * fast
+          target = math.clamp(
+              f + math.clamp(
+                  fishVelocity * predictionTime,
+                  -limit, limit
+              ),
+              0, 1
+          )
+          feedForward = fishVelocity
+      end
+      local originalGain = fishMoving and 5 or 8
+      local gain = 3.5 + (originalGain - 3.5) * fast
+      local errorPosition = target - b
+      local tolerance = math.min(width * 0.035, 0.008) * (1 - fast)
+      if math.abs(errorPosition) <= tolerance then
+          errorPosition = 0
+      elseif tolerance > 0 then
+          if errorPosition > 0 then
+              errorPosition -= tolerance
+          else
+              errorPosition += tolerance
+          end
+      end
+      local wantedVelocity = math.clamp(
+          feedForward + errorPosition * gain,
+          -1.5, 1.5
+      )
+      local errorVelocity = wantedVelocity - barVelocity
+      local originalThreshold = fishMoving and 0.025 or 0.012
+      local threshold = 0.030 + (originalThreshold - 0.030) * fast
+      local desired = held
+      if errorVelocity > threshold then
+          desired = true
+      elseif errorVelocity < -threshold then
+          desired = false
+      end
+      if math.abs(f - b) > width * 0.5 then
+          desired = f > b
+      end
+      mouse(desired)
+      return true
+  end
+  layoutTeleportMenus()
+  display("OFF")
+  previous[MACRO_KEY] = iskeypressed(MACRO_KEY) == true
+  previous[0x9D] = iskeypressed(0x9D) == true -- Right Ctrl scan code
+  previous[0xDD] = iskeypressed(0xDD) == true
+  previous[0xDB] = iskeypressed(0xDB) == true
+  previous[0x1A] = iskeypressed(0x1A) == true
+  previous[INSTANT_KEY] = iskeypressed(INSTANT_KEY) == true
+  shown = true
+  fadeAmount = 1
+  fadeLastTime = tick()
+  updateFade(fadeLastTime)
+  task.spawn(function()
+      local ok, err = pcall(function()
+          while alive do
+              local now = tick()
+              local macroPrimary = edge(MACRO_KEY)
+              local macroScan = edge(0x9D)
+              local toggle = macroPrimary or macroScan -- Right Ctrl
+              local instantToggle = edge(INSTANT_KEY) -- Right Alt
+              local hide = edge(0xDD) -- ]
+              local harpoonToggleVk = edge(0xDB) -- [ virtual key
+              local harpoonToggleScan = edge(0x1A) -- [ scan code
+              local harpoonToggle = harpoonToggleVk or harpoonToggleScan
+              local focused = isrbxactive()
+              local typing = false
+              pcall(function()
+                  typing = UserInputService:GetFocusedTextBox() ~= nil
+              end)
+              if typing then
+                  toggle, instantToggle, harpoonToggle = false, false, false
+              end
+              if not focused then
+                  navigationWanted = navigationOn
+              end
+              if not panelInputCaptured then updateKeys(now) end
+              updateDrag(focused)
+              if focused then
+                  if hide then
+                      shown = not shown
+                  end
+                  if instantToggle then toggleInstant() end
+                  if toggle then
+                      toggleMacro()
+                  end
+              end
+              if harpoonToggle and not typing then
+                  requestHarpoonToggle()
+              end
+              updatePanelInput(focused)
+              updateInstant(now, focused)
+              if not enabled or not focused or panelInputCaptured then
+                  mouse(false)
+                  releaseKey()
+                  releaseAt, idleSince = nil, nil
+                  recoveryStage = 0
+                  resetTracking()
+                  if focused and not panelInputCaptured then
+                      setNavigation(false)
+                  end
+                  display(not enabled and "OFF"
+                      or panelInputCaptured and "PAUSED / PANEL"
+                      or "PAUSED / UNFOCUSED")
+              else
+                  local reel = gui and gui:FindFirstChild("reel")
+                  local bar = reel and reel:FindFirstChild("bar")
+                  local fish = bar and bar:FindFirstChild("fish")
+                  local playerbar = bar and bar:FindFirstChild("playerbar")
+                  local button = harpoonPullEnabled and activeHarpoonPullButton()
+                      or (enabled and activeShakeButton())
+                  local reelActive = reel and bar and fish and playerbar
+                  local shakeActive = button ~= nil and not reelActive
+                  if equipPending and equippedRod() then
+                      equipPending = false
+                      equipReadyAt = 0
+                  end
+                  if equipPending then
+                      mouse(false)
+                      setNavigation(false)
+                      display("EQUIPPING ROD")
+                      if not navigationOn
+                          and not navigationReleaseAt
+                          and now >= navigationReadyAt
+                          and not pendingKey then
+                          if tap(0x54, now) then -- T
+                              equipPending = false
+                              equipReadyAt = now + 0.40
+                              nextCast = equipReadyAt
+                              releaseAt = nil
+                              idleSince = nil
+                          end
+                      end
+                  elseif now < equipReadyAt then
+                      mouse(false)
+                      display("EQUIPPING ROD")
+                  elseif reelActive then
+                      releaseKey()
+                      setNavigation(false)
+                      idleSince = nil
+                      recoveryStage = 0
+                      if not wasReeling then
+                          mouse(false)
+                          resetTracking()
+                      end
+                      wasReeling = true
+                      releaseAt = nil
+                      if fish and playerbar then
+                          local valid = track(bar, fish, playerbar, now)
+                          display(
+                              not valid and "WAITING FOR REEL"
+                              or fishMoving and "PREDICTING"
+                              or "CENTERING"
+                          )
+                      else
+                          mouse(false)
+                          display("WAITING FOR REEL")
+                      end
+                  elseif shakeActive then
+                      mouse(false)
+                      releaseAt, idleSince = nil, nil
+                      recoveryStage = 0
+                      wasReeling = false
+                      resetTracking()
+                      if navigationOn or navigationWanted then
+                          releaseKey()
+                          setNavigation(false)
+                      end
+                      display("SHAKING")
+                  else
+                      if navigationOn or navigationWanted then
+                          releaseKey()
+                          setNavigation(false)
+                      end
+                      if wasReeling then
+                          wasReeling = false
+                          mouse(false)
+                          resetTracking()
+                          nextCast, idleSince = now, now
+                      end
+                      idleSince = idleSince or now
+                      if recoveryStage == 0
+                          and now - idleSince >= FAILSAFE then
+                          mouse(false)
+                          releaseAt = nil
+                          releaseKey()
+                          recoveryStage, recoveryAt = 1, now
+                      end
+                      if recoveryStage > 0 then
+                          display("RECOVERING ROD")
+                          if now >= recoveryAt and not pendingKey then
+                              if recoveryStage == 1 then
+                                  if tap(0x54, now) then
+                                      recoveryStage = 2
+                                      recoveryAt = now + 0.35
+                                  end
+                              elseif recoveryStage == 2 then
+                                  if tap(0x54, now) then
+                                      recoveryStage = 3
+                                      recoveryAt = now + 0.35
+                                  end
+                              else
+                                  recoveryStage = 0
+                                  idleSince, nextCast = now, now
+                              end
+                          end
+                      elseif releaseAt then
+                          local percent, inGreen = castReading()
+                          if castMode == "Instant" and now - releaseAt >= INSTANT_HOLD then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display("INSTANT CAST")
+                          elseif castMode == "Perfect" and inGreen then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display(string.format("CAST %.0f%% / GREEN", percent))
+                          elseif now - releaseAt >= CAST_TIMEOUT then
+                              mouse(false)
+                              releaseAt = nil
+                              nextCast = now + RETRY
+                              display("CAST METER UNAVAILABLE / RETRY")
+                          else
+                              display(castMode == "Instant" and "INSTANT CAST"
+                                  or percent and string.format("CAST %.0f%% / 100%%", percent)
+                                  or "WAITING FOR CAST METER")
+                          end
+                      elseif dragging then
+                          display("MOVING PANEL")
+                      elseif now >= nextCast and equippedRod() then
+                          castMeter, castFill, castGreen = nil, nil, nil
+                          mouse(true)
+                          releaseAt = now -- Start of charge; not a release deadline.
+                          display(castMode == "Instant" and "INSTANT CAST" or "CAST 0% / 100%")
+                      else
+                          display("WAITING FOR BITE")
+                      end
+                  end
+              end
+              if now >= nextStats then
+                  refreshStats(now)
+                  nextStats = now + 0.5
+              end
+              updateDropdownAnimation(now)
+              updateFade(now)
+              task.wait(0.01)
+          end
+      end)
+      if not ok then
+          stop()
+          warn("Fisch Macro stopped: " .. tostring(err))
+      end
+  end)
+
