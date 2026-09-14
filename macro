@@ -217,11 +217,20 @@
   npcLabel("Rare Goods Dealer", 26, 533, 12)
   npcLabel("Elder Kaito", 26, 561, 12)
   local npcStatus = npcLabel("Click a name to teleport", 14, 592, 10, C.muted)
+  -- The Rare Goods Dealer can be absent from the loaded world.  Save the
+  -- position where this script starts so its menu entry can return here
+  -- without needing to resolve the dealer model.
+  local rareGoodsDealerStartPosition
+  do
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if root then rareGoodsDealerStartPosition = root.Position end
+  end
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 415, pos = {-943, 224, -988}},
       {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 443},
       {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 499, pos = {229, 139, 42}},
-      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 527},
+      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 527, useStartPosition = true},
       {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 555},
   }
   -- Permanent map shops; limited-stock dealers and Aurora spawns are excluded.
@@ -613,11 +622,20 @@
       local character = player.Character
       local root = character and character:FindFirstChild("HumanoidRootPart")
       if not root then npcStatus.Text = "Waiting for your character"; return end
-      local ok, pos = pcall(findNpcPosition, row)
-      if not ok then pos = nil end
-      local live = pos ~= nil
-      if not pos and row.pos then
-          pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local pos, live
+      if row.useStartPosition then
+          -- If the character was still loading when the script started,
+          -- capture the current position on the first click as a fallback.
+          pos = rareGoodsDealerStartPosition or root.Position
+          live = false
+      else
+          local ok
+          ok, pos = pcall(findNpcPosition, row)
+          if not ok then pos = nil end
+          live = pos ~= nil
+          if not pos and row.pos then
+              pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+          end
       end
       if not pos then
           npcStatus.Text = row.name .. ": not loaded"
