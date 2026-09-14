@@ -38,11 +38,13 @@
   local world = nil
 
   local alive, enabled, shown = true, false, true
+  local harpoonPullEnabled = false
   local instantEnabled, instantLoading = false, false
   local instantCache, instantOriginal
   local instantGeneration, nextInstant = 0, 0
   local toggleInstant
   local toggleMacro
+  local toggleHarpoonPull
   local held, wasReeling = false, false
   local equipPending = false
   local equipReadyAt = 0
@@ -58,6 +60,7 @@
   local idleSince
   local recoveryStage, recoveryAt = 0, 0
   local previous, drawings, layout = {}, {}, {}
+  local inputConnections = {}
 
   local lastFish, lastBar, lastTime
   local fishVelocity, barVelocity = 0, 0
@@ -231,7 +234,9 @@
   label("(u have to catch a", 151, 291, 9)
   label("fish first before", 151, 303, 9)
   label("enabling)", 151, 315, 9)
-  label("Click toggles | Right-drag to move", 14, 341, 9)
+  local harpoonPullText = label("Harpoon Pull OFF", 14, 341, 11)
+  harpoonPullText.Color = C.instantOff
+  local harpoonToggleLast = 0
 
   -- NPC menu: world names are resolved at click time; no purchases are sent.
   local npcToggleText = label("Teleports", 14, 365, 12)
@@ -413,6 +418,33 @@
       return nil
   end
 
+  local function activeHarpoonPullButton()
+      local currentGui = player:FindFirstChildOfClass("PlayerGui")
+      if not currentGui then return nil end
+      local minigame = currentGui:FindFirstChild("harpoonMinigame")
+      local safezone = minigame and minigame:FindFirstChild("safezone")
+      if not safezone then return nil end
+      local newest
+      for _, object in ipairs(safezone:GetChildren()) do
+          local objectName = tostring(object.Name):lower()
+          if object.ClassName == "ImageButton" and objectName:find("pull", 1, true) then
+              local ok, size = pcall(function() return object.AbsoluteSize end)
+              if ok and size and size.X > 8 and size.Y > 8 then
+                  local title = object:FindFirstChild("title")
+                  local textOk, text = pcall(function() return title and title.Text end)
+                  local normalized = textOk and type(text) == "string"
+                      and text:upper():gsub("[^%a]", "") or ""
+                  if normalized == "PULL" then
+                      -- GetChildren order follows creation order; keep the
+                      -- newest active circle instead of the original one.
+                      newest = object
+                  end
+              end
+          end
+      end
+      return newest
+  end
+
   local function moveMouseFast(x, y)
       if type(mousemoveabs) == "function" then
           return pcall(mousemoveabs, x, y)
@@ -432,26 +464,52 @@
   -- states between bite, shake, and reel.
   local lastShakeX, lastShakeY
   local lastShakeMoveAt = tick()
+  local harpoonNextClickAt = 0
+  local harpoonReadyAt = 0
   task.spawn(function()
       while alive do
-          if enabled and not panelInputCaptured then
-              local button = activeShakeButton()
+          if (enabled or harpoonPullEnabled) and not panelInputCaptured then
+              local isHarpoonButton = harpoonPullEnabled
+              local button = harpoonPullEnabled and activeHarpoonPullButton()
+                  or (enabled and activeShakeButton())
               if button then
                   local buttonX, buttonY
+                  local didClick = false
                   pcall(function()
                       local p, size = button.AbsolutePosition, button.AbsoluteSize
                       local x, y = p.X + size.X / 2, p.Y + size.Y / 2
                       buttonX, buttonY = x, y
                       moveMouseFast(x, y)
-                      pcall(mouse1press)
-                      task.wait(0.02)
-                      pcall(mouse1release)
-                      VirtualInputManager:SendMouseButtonEvent(
-                          x, y, 0, true, player, 0)
-                      VirtualInputManager:SendMouseButtonEvent(
-                          x, y, 0, false, player, 0)
+                      if isHarpoonButton then
+                          -- Let the OS cursor settle on the newly detected circle
+                          -- before sending the single Pull click.
+                          task.wait(0.01)
+                          moveMouseFast(x, y)
+                          if tick() >= harpoonNextClickAt and harpoonReadyAt == 0 then
+                              harpoonReadyAt = tick() + 0.1
+                          end
+                      end
+                      if not isHarpoonButton
+                          or (tick() >= harpoonNextClickAt and tick() >= harpoonReadyAt) then
+                          didClick = true
+                          if isHarpoonButton then
+                              pcall(mouse1click)
+                          else
+                              pcall(mouse1press)
+                              task.wait(0.02)
+                              pcall(mouse1release)
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  x, y, 0, true, player, 0)
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  x, y, 0, false, player, 0)
+                          end
+                      end
                   end)
                   if buttonX then
+                      if isHarpoonButton and didClick then
+                          harpoonNextClickAt = tick() + 0.05
+                          harpoonReadyAt = 0
+                      end
                       if not lastShakeX
                           or math.abs(buttonX - lastShakeX) > 2
                           or math.abs(buttonY - lastShakeY) > 2 then
@@ -467,7 +525,8 @@
                           lastShakeMoveAt = tick()
                       end
                   end
-                  task.wait(0.1)
+                  -- Re-read the button every cycle so moving pull controls are followed.
+                  task.wait(isHarpoonButton and 0.1 or 0.06)
               else
                   task.wait(0.03)
               end
@@ -1153,6 +1212,11 @@
           and localY >= 263 and localY <= 285 then
           toggleMacro()
       end
+      if inside and not dragging and down and not leftWasDown
+          and localX >= 10 and localX <= 147
+          and localY >= 337 and localY <= 356 then
+          toggleHarpoonPull()
+      end
       if inside and not dragging and down and not leftWasDown then
           if localY >= 357 and localY <= 387 then
               npcMenuOpen = not npcMenuOpen
@@ -1833,6 +1897,31 @@
       nextEnvironment = 0
   end
 
+  toggleHarpoonPull = function()
+      harpoonPullEnabled = not harpoonPullEnabled
+      if not harpoonPullEnabled then
+          harpoonNextClickAt = 0
+          harpoonReadyAt = 0
+      end
+      harpoonPullText.Text = harpoonPullEnabled and "Harpoon Pull ON" or "Harpoon Pull OFF"
+      harpoonPullText.Color = harpoonPullEnabled and C.instantOn or C.instantOff
+  end
+
+  local function requestHarpoonToggle()
+      local now = tick()
+      if now - harpoonToggleLast < 0.20 then return end
+      harpoonToggleLast = now
+      toggleHarpoonPull()
+  end
+
+  pcall(function()
+      table.insert(inputConnections, UserInputService.InputBegan:Connect(function(input, processed)
+          if not processed and (input.KeyCode == 219 or input.KeyCode == 26) then
+              requestHarpoonToggle()
+          end
+      end))
+  end)
+
   local function updateInstant(now, focused)
       if not instantEnabled or not focused or now < nextInstant then return end
       nextInstant = now + 0.05
@@ -1875,6 +1964,10 @@
               task.wait(KEY_HOLD)
               keyrelease(0xDC)
           end)
+      end
+
+      for _, connection in ipairs(inputConnections) do
+          pcall(function() connection:Disconnect() end)
       end
 
       for _, d in ipairs(drawings) do
@@ -2023,6 +2116,8 @@
   previous[MACRO_KEY] = iskeypressed(MACRO_KEY) == true
   previous[0x9D] = iskeypressed(0x9D) == true -- Right Ctrl scan code
   previous[0xDD] = iskeypressed(0xDD) == true
+  previous[0xDB] = iskeypressed(0xDB) == true
+  previous[0x1A] = iskeypressed(0x1A) == true
   previous[INSTANT_KEY] = iskeypressed(INSTANT_KEY) == true
 
   -- Force the GUI into its intended initial visible state.
@@ -2040,13 +2135,16 @@
               local toggle = macroPrimary or macroScan -- Right Ctrl
               local instantToggle = edge(INSTANT_KEY) -- Right Alt
               local hide = edge(0xDD) -- ]
+              local harpoonToggleVk = edge(0xDB) -- [ virtual key
+              local harpoonToggleScan = edge(0x1A) -- [ scan code
+              local harpoonToggle = harpoonToggleVk or harpoonToggleScan
               local focused = isrbxactive()
               local typing = false
               pcall(function()
                   typing = UserInputService:GetFocusedTextBox() ~= nil
               end)
               if typing then
-                  toggle, instantToggle = false, false
+                  toggle, instantToggle, harpoonToggle = false, false, false
               end
 
               if not focused then
@@ -2066,6 +2164,11 @@
                   if toggle then
                       toggleMacro()
                   end
+              end
+
+              -- Keep Harpoon mode independent from the focused/macro branch.
+              if harpoonToggle and not typing then
+                  requestHarpoonToggle()
               end
 
               updatePanelInput(focused)
@@ -2091,7 +2194,8 @@
                   local fish = bar and bar:FindFirstChild("fish")
                   local playerbar = bar and bar:FindFirstChild("playerbar")
 
-                  local button = activeShakeButton()
+                  local button = harpoonPullEnabled and activeHarpoonPullButton()
+                      or (enabled and activeShakeButton())
                   local reelActive = reel and bar and fish and playerbar
                   local shakeActive = button ~= nil and not reelActive
 
