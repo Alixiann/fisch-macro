@@ -108,16 +108,20 @@
       drawings = {},
       slots = {}
   }
-  local customGpsFallbackBox, customGpsFallbackText, customGpsFallbackButton
+  local customGpsFallbackBox, customGpsFallbackText
   local customGpsText = ""
   local customGpsEditing = false
   local customGpsKeys = {}
-  previous.fishEsp = {
+  fishEsp = {
       box = nil, input = nil, toggle = nil, status = nil,
       text = "", editing = false, enabled = false, keys = {}, drawings = {},
       targets = {},
   }
-  fishEsp = previous.fishEsp
+  rodSpeed = {
+      box = nil, input = nil, toggle = nil, status = nil,
+      text = "50", editing = false, enabled = false, loading = false,
+      keys = {}, cache = nil, original = nil, generation = 0,
+  }
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
       d.Visible = true
@@ -265,7 +269,7 @@
   automationMenuDrawings = {}
   automationToggleText = label("Automation", 12, 221, 10)
   automationToggleText.Color = C.cyan
-  automationArrow = label("^", 236, 219, 14)
+  automationArrow = label("v", 236, 219, 14)
   automationArrow.Color = C.cyan
   local automationX, automationBindX = 12, 140
   local macroText = label("Macro OFF", automationX, 242, 10)
@@ -281,6 +285,23 @@
   local castModeText = label("Instant cast", automationX, 317, 10)
   castModeText.Color = C.instantOff
   automationMenuDrawings[castModeText] = true
+  rodSpeed.heading = label("Rod speed", automationX, 339, 10)
+  rodSpeed.heading.Color = C.yellow
+  automationMenuDrawings[rodSpeed.heading] = true
+  rodSpeed.box = add("Square", 12, 354)
+  rodSpeed.box.Size = Vector2.new(PANEL_W - 24, 22)
+  rodSpeed.box.Color = Color3.fromRGB(35, 42, 56)
+  rodSpeed.box.Filled = true
+  automationMenuDrawings[rodSpeed.box] = true
+  rodSpeed.input = label(rodSpeed.text, 18, 359, 9)
+  rodSpeed.input.Color = C.white
+  automationMenuDrawings[rodSpeed.input] = true
+  rodSpeed.toggle = label("Rod speed OFF", automationX, 382, 10)
+  rodSpeed.toggle.Color = C.instantOff
+  automationMenuDrawings[rodSpeed.toggle] = true
+  rodSpeed.status = label("signed value", 120, 382, 8)
+  rodSpeed.status.Color = C.muted
+  automationMenuDrawings[rodSpeed.status] = true
   instantCatchNote = label("Catch a fish before Instant Catch", automationX, 276, 7)
   instantCatchNote.Color = C.muted
   automationMenuDrawings[instantCatchNote] = true
@@ -289,22 +310,22 @@
   automationMenuDrawings[harpoonPullText] = true
   automationKeybindHarpoon = label("Keybind: [", automationBindX, 296, 8)
   automationMenuDrawings[automationKeybindHarpoon] = true
-  fishEsp.heading = label("Fish ESP", 12, 339, 10)
+  fishEsp.heading = label("Fish ESP", 12, 406, 10)
   fishEsp.heading.Color = C.cyan
-  fishEsp.box = add("Square", 12, 355)
+  fishEsp.box = add("Square", 12, 422)
   fishEsp.box.Size = Vector2.new(PANEL_W - 24, 22)
   fishEsp.box.Color = Color3.fromRGB(35, 42, 56)
   fishEsp.box.Filled = true
-  fishEsp.input = label("fish names, separated by commas", 18, 360, 9)
+  fishEsp.input = label("fish names, separated by commas", 18, 427, 9)
   fishEsp.input.Color = C.muted
-  fishEsp.toggle = label("Fish ESP OFF", 12, 382, 10)
+  fishEsp.toggle = label("Fish ESP OFF", 12, 449, 10)
   fishEsp.toggle.Color = C.instantOff
-  fishEsp.status = label("", 120, 382, 8)
+  fishEsp.status = label("", 120, 449, 8)
   fishEsp.status.Color = C.muted
   local harpoonToggleLast = 0
-  local npcToggleText = label("Teleports", 12, 407, 10)
+  local npcToggleText = label("Teleports", 12, 474, 10)
   npcToggleText.Color = C.cyan
-  local npcArrow = label("v", 236, 405, 14)
+  local npcArrow = label("v", 236, 472, 14)
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
@@ -407,17 +428,25 @@
   local function npcName(value)
       return tostring(value):lower():gsub("[^%w]", "")
   end
+  local function hasNpcName(value, aliases)
+      local normalized = npcName(value)
+      for _, alias in ipairs(aliases) do
+          if normalized == alias then return true end
+      end
+      return false
+  end
+  local function objectPart(object)
+      if object:IsA("BasePart") then return object end
+      if object:IsA("Model") then
+          return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
+      end
+  end
   local function findNpcPosition(row)
       for _, object in ipairs(W:GetDescendants()) do
-          local match = false
-          local name = npcName(object.Name)
-          for _, alias in ipairs(row.aliases) do
-              if name == alias then match = true; break end
-          end
-          if match then
+          if hasNpcName(object.Name, row.aliases) then
               local model = object
-              if model.ClassName ~= "Model" then model = object.Parent end
-              if model and model.ClassName == "Model" then
+              if not model:IsA("Model") then model = object.Parent end
+              if model and model:IsA("Model") then
                   local part
                   if row.preferHead then
                       part = model:FindFirstChild("Head")
@@ -435,6 +464,136 @@
       instantText.Text = instantLoading and "L Loading..."
           or instantEnabled and "Instant catch ON" or "Instant catch OFF"
       instantText.Color = instantEnabled and C.instantOn or C.instantOff
+  end
+  rodSpeed.updateLabel = function()
+      rodSpeed.input.Text = rodSpeed.text ~= "" and rodSpeed.text or "type signed speed"
+      rodSpeed.input.Color = rodSpeed.text ~= "" and C.white or C.muted
+      rodSpeed.toggle.Text = rodSpeed.loading and "Rod speed loading..."
+          or rodSpeed.enabled and "Rod speed ON" or "Rod speed OFF"
+      rodSpeed.toggle.Color = rodSpeed.enabled and C.instantOn or C.instantOff
+      rodSpeed.status.Text = rodSpeed.loading and "searching..."
+          or rodSpeed.enabled and "applied" or "signed value"
+  end
+  rodSpeed.apply = function()
+      if not rodSpeed.enabled or not rodSpeed.cache or instantEnabled then return end
+      local value = tonumber(rodSpeed.text)
+      if not value or value ~= value or math.abs(value) == math.huge then
+          rodSpeed.status.Text = "enter a number"
+          return
+      end
+      rodSpeed.value = value
+      local ok, err = pcall(applygc, rodSpeed.cache, "progressefficiency", value)
+      if not ok then
+          rodSpeed.status.Text = "apply failed"
+          warn("Rod speed stopped: " .. tostring(err))
+      else
+          rodSpeed.status.Text = "applied " .. tostring(value)
+      end
+  end
+  rodSpeed.updateTyping = function()
+      if not rodSpeed.editing then return end
+      local ctrl = iskeypressed(0x11) == true
+      local paste = iskeypressed(0x56) == true
+      if ctrl and paste and not rodSpeed.keys[0x100] then
+          local getter = type(getclipboard) == "function" and getclipboard
+              or type(get_clipboard) == "function" and get_clipboard
+          if getter then
+              local ok, value = pcall(getter)
+              if ok then rodSpeed.text = tostring(value or "") end
+          end
+      end
+      rodSpeed.keys[0x100] = ctrl and paste
+      local keys = {
+          [0x30] = "0", [0x31] = "1", [0x32] = "2", [0x33] = "3", [0x34] = "4",
+          [0x35] = "5", [0x36] = "6", [0x37] = "7", [0x38] = "8", [0x39] = "9",
+          [0x60] = "0", [0x61] = "1", [0x62] = "2", [0x63] = "3", [0x64] = "4",
+          [0x65] = "5", [0x66] = "6", [0x67] = "7", [0x68] = "8", [0x69] = "9",
+      }
+      for code, character in pairs(keys) do
+          local down = iskeypressed(code) == true
+          if down and not ctrl and not rodSpeed.keys[code] then
+              rodSpeed.text = rodSpeed.text .. character
+          end
+          rodSpeed.keys[code] = down
+      end
+      local period = iskeypressed(0xBE) == true or iskeypressed(0x6E) == true
+      if period and not rodSpeed.keys[0x101] then rodSpeed.text = rodSpeed.text .. "." end
+      rodSpeed.keys[0x101] = period
+      local minus = iskeypressed(0xBD) == true or iskeypressed(0x6D) == true
+      if minus and not rodSpeed.keys[0x102] and not rodSpeed.text:find("-", 1, true) then
+          rodSpeed.text = "-" .. rodSpeed.text
+      end
+      rodSpeed.keys[0x102] = minus
+      local plus = iskeypressed(0xBB) == true
+      if plus and not rodSpeed.keys[0x103] and not rodSpeed.text:find("+", 1, true) then
+          rodSpeed.text = "+" .. rodSpeed.text
+      end
+      rodSpeed.keys[0x103] = plus
+      rodSpeed.text = rodSpeed.text:sub(1, 32)
+      local backspace = iskeypressed(0x08) == true
+      if backspace and not rodSpeed.keys[0x08] then
+          rodSpeed.text = rodSpeed.text:sub(1, math.max(0, #rodSpeed.text - 1))
+      end
+      rodSpeed.keys[0x08] = backspace
+      local enter = iskeypressed(0x0D) == true
+      if enter and not rodSpeed.keys[0x0D] then
+          rodSpeed.editing = false
+          pcall(setrobloxinput, true)
+          rodSpeed.apply()
+      end
+      rodSpeed.keys[0x0D] = enter
+      rodSpeed.updateLabel()
+      if rodSpeed.enabled then rodSpeed.apply() end
+  end
+  rodSpeed.stop = function()
+      rodSpeed.generation = rodSpeed.generation + 1
+      rodSpeed.loading, rodSpeed.enabled = false, false
+      rodSpeed.editing, rodSpeed.keys = false, {}
+      pcall(setrobloxinput, true)
+      if rodSpeed.cache and not instantEnabled then
+          pcall(applygc, rodSpeed.cache, "progressefficiency", rodSpeed.original or 1)
+      elseif instantEnabled then
+          rodSpeed.restoreOriginal = true
+      end
+      rodSpeed.cache, rodSpeed.original = nil, nil
+      rodSpeed.updateLabel()
+  end
+  rodSpeed.toggleEnabled = function()
+      if rodSpeed.enabled or rodSpeed.loading then
+          rodSpeed.stop()
+          return
+      end
+      if instantEnabled then
+          rodSpeed.status.Text = "disable Instant Catch first"
+          return
+      end
+      if type(getgc) ~= "function" or type(applygc) ~= "function" then
+          rodSpeed.status.Text = "Matcha getgc/applygc required"
+          warn("Rod speed requires Matcha getgc / applygc")
+          return
+      end
+      rodSpeed.generation = rodSpeed.generation + 1
+      local generation = rodSpeed.generation
+      rodSpeed.loading = true
+      rodSpeed.updateLabel()
+      task.spawn(function()
+          local ok, cache = pcall(getgc, {"progressefficiency"})
+          if not alive or generation ~= rodSpeed.generation then return end
+          rodSpeed.loading = false
+          if not ok or not cache then
+              rodSpeed.updateLabel()
+              rodSpeed.status.Text = "cache unavailable"
+              return
+          end
+          local original = cache.progressefficiency
+          if type(original) ~= "number" or original ~= original
+              or math.abs(original) == math.huge then original = 1 end
+          rodSpeed.cache, rodSpeed.original = cache, original
+          rodSpeed.value = tonumber(rodSpeed.text) or 50
+          rodSpeed.enabled = true
+          rodSpeed.updateLabel()
+          rodSpeed.apply()
+      end)
   end
   local lastPanelX, lastPanelY
   local panelX, panelY
@@ -613,7 +772,6 @@
           local visible = shown and npcMenuOpen
           customGpsFallbackBox.Visible = visible
           customGpsFallbackText.Visible = visible
-          customGpsFallbackButton.Visible = visible
       end
       for _, entry in ipairs(layout) do
           local isMenuEntry = npcMenuDrawings[entry.d] or totemMenu.drawings[entry.d]
@@ -879,17 +1037,44 @@
       fishMoving, quietTime = false, 0
       activity = 0
   end
-  local function teleportNpc(row)
+  local function prepareTeleport()
       enabled, equipPending = false, false
       mouse(false)
       releaseKey()
       setNavigation(false)
       releaseAt, idleSince = nil, nil
       resetTracking()
-      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
+      if type(_G.StopAuroraRoute) == "function" then pcall(_G.StopAuroraRoute) end
+  end
+  local function characterRoot(status)
       local character = player.Character
       local root = character and character:FindFirstChild("HumanoidRootPart")
-      if not root then npcStatus.Text = "Waiting for your character"; return end
+      if not root and status then status.Text = "Waiting for your character" end
+      return root
+  end
+  local function writeTeleport(root, pos, offset, repeats)
+      local target = CFrame.new(
+          pos.X + (offset[1] or 0),
+          pos.Y + (offset[2] or 0),
+          pos.Z + (offset[3] or 0)
+      )
+      local ok, err = pcall(function() root.CFrame = target end)
+      if not ok then return false, err end
+      if repeats and repeats > 0 then
+          task.spawn(function()
+              for _ = 1, repeats do
+                  if not alive or not root.Parent then return end
+                  pcall(function() root.CFrame = target end)
+                  task.wait(0.05)
+              end
+          end)
+      end
+      return true
+  end
+  local function teleportNpc(row)
+      prepareTeleport()
+      local root = characterRoot(npcStatus)
+      if not root then return end
       local pos, live
       if row.skipNpc then
           pos = row.pos and Vector3.new(row.pos[1], row.pos[2], row.pos[3])
@@ -907,31 +1092,14 @@
           npcStatus.Text = row.name .. ": not loaded"
           return
       end
-      local moved, err = pcall(function()
-          root.CFrame = CFrame.new(
-              pos.X,
-              pos.Y + (row.exactPosition and 0 or 2),
-              pos.Z + (row.exactPosition and 0 or 4)
-          )
-      end)
+      local moved, err = writeTeleport(root, pos, {
+          0, row.exactPosition and 0 or 2, row.exactPosition and 0 or 4
+      }, 6)
       if not moved then
           npcStatus.Text = "Teleport write failed"
           warn("NPC teleport: " .. tostring(err))
           return
       end
-      task.spawn(function()
-          for _ = 1, 6 do
-              if not alive or not root or not root.Parent then return end
-              pcall(function()
-                  root.CFrame = CFrame.new(
-                      pos.X,
-                      pos.Y + (row.exactPosition and 0 or 2),
-                      pos.Z + (row.exactPosition and 0 or 4)
-                  )
-              end)
-              task.wait(0.05)
-          end
-      end)
       npcStatus.Text = row.name .. (live and ": moved" or ": map location")
   end
   local function resizePanel(delta)
@@ -945,16 +1113,16 @@
       npcSubArrow.Text = npcSubOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
       islandMenu.arrow.Text = islandMenu.open and "^" or "v"
-      local automationOffset = automationMenuOpen and 0 or -74
-      PANEL_H = 430 + automationOffset
+      local automationOffset = automationMenuOpen and 0 or -141
+      PANEL_H = 497 + automationOffset
       local compactPositions = {
-          [fishEsp.heading] = 339,
-          [fishEsp.box] = 355,
-          [fishEsp.input] = 360,
-          [fishEsp.toggle] = 382,
-          [fishEsp.status] = 382,
-          [npcToggleText] = 407,
-          [npcArrow] = 405,
+          [fishEsp.heading] = 406,
+          [fishEsp.box] = 422,
+          [fishEsp.input] = 427,
+          [fishEsp.toggle] = 449,
+          [fishEsp.status] = 449,
+          [npcToggleText] = 474,
+          [npcArrow] = 472,
       }
       for _, entry in ipairs(layout) do
           local base = compactPositions[entry.d]
@@ -1029,16 +1197,9 @@
       layoutTeleportMenus()
   end
   local function teleportTotem(row)
-      enabled, equipPending = false, false
-      mouse(false)
-      releaseKey()
-      setNavigation(false)
-      releaseAt, idleSince = nil, nil
-      resetTracking()
-      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
-      local character = player.Character
-      local root = character and character:FindFirstChild("HumanoidRootPart")
-      if not root then totemMenu.status.Text = "Waiting for your character"; return end
+      prepareTeleport()
+      local root = characterRoot(totemMenu.status)
+      if not root then return end
       local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
       local live = false
       pcall(function()
@@ -1047,15 +1208,11 @@
               if npcName(object.Name) == targetName then
                   local node, heldTool = object, false
                   while node and node ~= W do
-                      if node.ClassName == "Tool" then heldTool = true; break end
+                      if node:IsA("Tool") then heldTool = true; break end
                       node = node.Parent
                   end
                   if not heldTool then
-                      local part
-                      if object:IsA("BasePart") then part = object
-                      elseif object.ClassName == "Model" then
-                          part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
-                      end
+                      local part = objectPart(object)
                       if part and (part.Position - pos).Magnitude < 200 then
                           pos, live = part.Position, true
                           break
@@ -1064,9 +1221,7 @@
               end
           end
       end)
-      local ok, err = pcall(function()
-          root.CFrame = CFrame.new(pos.X, pos.Y + 3, pos.Z + 3)
-      end)
+      local ok, err = writeTeleport(root, pos, {0, 3, 3})
       totemMenu.status.Text = ok and (live and "At shop display; buy manually" or "At mapped shop; buy manually")
           or "Teleport write failed"
       if not ok then warn("Totem teleport: " .. tostring(err)) end
@@ -1074,51 +1229,25 @@
   local function findIslandPosition(row)
       if not row.match then return nil end
       for _, object in ipairs(W:GetDescendants()) do
-          local normalized = npcName(object.Name)
-          for _, alias in ipairs(row.match) do
-              if normalized == alias then
-                  local part
-                  if object:IsA("BasePart") then
-                      part = object
-                  elseif object.ClassName == "Model" then
-                      part = object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
-                  end
-                  if part then return part.Position end
-              end
+          if hasNpcName(object.Name, row.match) then
+              local part = objectPart(object)
+              if part then return part.Position end
           end
       end
   end
   local function teleportIsland(row)
-      enabled, equipPending = false, false
-      mouse(false)
-      releaseKey()
-      setNavigation(false)
-      releaseAt, idleSince = nil, nil
-      resetTracking()
-      if _G.StopAuroraRoute then _G.StopAuroraRoute() end
-      local character = player.Character
-      local root = character and character:FindFirstChild("HumanoidRootPart")
-      if not root then islandMenu.status.Text = "Waiting for your character"; return end
+      prepareTeleport()
+      local root = characterRoot(islandMenu.status)
+      if not root then return end
       local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
       local live = false
       local okFind, livePos = pcall(findIslandPosition, row)
       if okFind and livePos then pos, live = livePos, true end
       local offset = row.offset or {0, 0, 0}
-      local ok, err = pcall(function()
-          root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
-      end)
+      local ok, err = writeTeleport(root, pos, {
+          offset[1], 3 + offset[2], 3 + offset[3]
+      }, 6)
       islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
-      if ok then
-          task.spawn(function()
-              for _ = 1, 6 do
-                  if not alive or not root or not root.Parent then return end
-                  pcall(function()
-                      root.CFrame = CFrame.new(pos.X + offset[1], pos.Y + 3 + offset[2], pos.Z + 3 + offset[3])
-                  end)
-                  task.wait(0.05)
-              end
-          end)
-      end
       if not ok then warn("Island teleport: " .. tostring(err)) end
   end
   local function updateCustomGpsDisplay()
@@ -1480,12 +1609,7 @@
       end
   end)
   local function teleportCustomGps()
-      enabled, equipPending = false, false
-      mouse(false)
-      releaseKey()
-      setNavigation(false)
-      releaseAt, idleSince = nil, nil
-      resetTracking()
+      prepareTeleport()
       local text = customGpsText
       customGpsEditing = false
       pcall(setrobloxinput, true)
@@ -1499,12 +1623,9 @@
           npcStatus.Text = "Enter three GPS numbers in the GPS box"
           return
       end
-      local character = player.Character
-      local root = character and character:FindFirstChild("HumanoidRootPart")
-      if not root then npcStatus.Text = "Waiting for your character"; return end
-      local ok, err = pcall(function()
-          root.CFrame = CFrame.new(x, y + 3, z + 3)
-      end)
+      local root = characterRoot(npcStatus)
+      if not root then return end
+      local ok, err = writeTeleport(root, Vector3.new(x, y, z), {0, 3, 3})
       npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", x, y, z)
           or "Teleport write failed"
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
@@ -1519,10 +1640,6 @@
   customGpsFallbackText.Color = C.muted
   customGpsFallbackText.Visible = false
   npcMenuDrawings[customGpsFallbackText] = 397
-  customGpsFallbackButton = label("", 88, 428, 12)
-  customGpsFallbackButton.Color = C.bg
-  customGpsFallbackButton.Visible = false
-  npcMenuDrawings[customGpsFallbackButton] = 425
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
       local dropdownX = teleportWindow.x
@@ -1532,7 +1649,7 @@
           and type(x) == "number" and type(y) == "number"
           and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
           and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
-      local insideDropdown = focused and shown and npcMenuOpen and dropdownY
+      local insideDropdown = focused and shown and npcMenuOpen and dropdownX and dropdownY
           and type(x) == "number" and type(y) == "number"
           and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
           and y >= dropdownY and y <= dropdownY + dropdownHeight
@@ -1560,8 +1677,9 @@
           or insideMain and (x - lastPanelX) / uiScale or 0
       local localY = insideDropdown and (y - dropdownY) / uiScale + 388
           or insideMain and (y - lastPanelY) / uiScale or 0
-      local contentY = localY - (automationMenuOpen and 0 or -74)
+      local contentY = localY - (automationMenuOpen and 0 or -141)
       updateCustomGpsTyping()
+      pcall(rodSpeed.updateTyping)
       if not pcall(fishEsp.updateTyping) then
           fishEsp.editing = false
           pcall(setrobloxinput, true)
@@ -1573,18 +1691,37 @@
           layoutTeleportMenus()
       end
       if fishEsp.editing and inside and down and not leftWasDown
-          and not (contentY >= 352 and contentY < 379) then
+          and not (contentY >= 420 and contentY < 446) then
           fishEsp.editing = false
           pcall(setrobloxinput, true)
       end
+      if rodSpeed.editing and inside and down and not leftWasDown
+          and not (contentY >= 352 and contentY < 378) then
+          rodSpeed.editing = false
+          pcall(setrobloxinput, true)
+      end
       if inside and not dragging and down and not leftWasDown
-          and contentY >= 352 and contentY < 379 then
+          and automationMenuOpen
+          and contentY >= 352 and contentY < 378 then
+          if rodSpeed.text == "50" then rodSpeed.text = "" end
+          rodSpeed.editing = true
+          rodSpeed.keys = {}
+          rodSpeed.updateLabel()
+      end
+      if inside and not dragging and down and not leftWasDown
+          and contentY >= 420 and contentY < 446 then
           fishEsp.editing = true
           fishEsp.keys = {}
           fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
       elseif inside and not dragging and down and not leftWasDown
-          and contentY >= 378 and contentY <= 402 then
+          and contentY >= 444 and contentY <= 470 then
           fishEsp.toggleEnabled()
+          releasePanelInput()
+      end
+      if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
+          and contentY >= 378 and contentY <= 403 then
+          rodSpeed.toggleEnabled()
           releasePanelInput()
       end
       if customGpsEditing and inside and down and not leftWasDown
@@ -1628,40 +1765,36 @@
           toggleHarpoonPull()
       end
       if inside and not dragging and down and not leftWasDown then
-          if insideMain and contentY >= 400 and contentY <= 430 then
+          if insideMain and contentY >= 467 and contentY <= 497 then
               npcMenuOpen = not npcMenuOpen
-              if npcMenuOpen then
-                  totemMenu.open, islandMenu.open = false, false
-              else
-                  totemMenu.open, islandMenu.open = false, false
-                  customGpsEditing = false
-              end
+              totemMenu.open, islandMenu.open = false, false
+              if not npcMenuOpen then customGpsEditing = false end
               layoutTeleportMenus()
-          elseif npcMenuOpen and localY >= 397 and localY < 425 then
+          elseif insideDropdown and localY >= 397 and localY < 425 then
               customGpsEditing = true
               customGpsKeys = {}
               pcall(setrobloxinput, false)
               updateCustomGpsDisplay()
-          elseif npcMenuOpen and localY >= 452 and localY < 480 then
+          elseif insideDropdown and localY >= 452 and localY < 480 then
               npcSubOpen = not npcSubOpen
               layoutTeleportMenus()
-          elseif npcMenuOpen and localY >= 425 and localY < 452 then
+          elseif insideDropdown and localY >= 425 and localY < 452 then
               teleportCustomGps()
-          elseif npcMenuOpen and localY >= islandMenu.top and localY < islandMenu.top + 32 then
+          elseif insideDropdown and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
               if islandMenu.open then
                   totemMenu.open = false
                   totemMenu.anim = 0
               end
               layoutTeleportMenus()
-          elseif npcMenuOpen and localY >= totemMenu.top and localY < totemMenu.top + 32 then
+          elseif insideDropdown and localY >= totemMenu.top and localY < totemMenu.top + 32 then
               totemMenu.open = not totemMenu.open
               if totemMenu.open then
                   islandMenu.open = false
                   islandMenu.anim = 0
               end
               layoutTeleportMenus()
-          elseif npcMenuOpen and islandMenu.open then
+          elseif insideDropdown and islandMenu.open then
               local offset = localY - islandMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#islandMenu.rows / islandMenu.pageSize)
@@ -1673,7 +1806,7 @@
                   local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + slot]
                   if row then teleportIsland(row) end
               end
-          elseif npcMenuOpen and totemMenu.open then
+          elseif insideDropdown and totemMenu.open then
               local offset = localY - totemMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
@@ -1685,9 +1818,10 @@
                   local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + slot]
                   if row then teleportTotem(row) end
               end
-          elseif npcMenuOpen and x >= lastPanelX + 12 and x <= lastPanelX + PANEL_W - 12 then
+          elseif insideDropdown then
               for _, row in ipairs(npcRows) do
-                  if localY >= row.y and localY < row.y + 27 then
+                  if localX >= 12 and localX <= PANEL_W - 12
+                      and localY >= row.y and localY < row.y + 27 then
                       teleportNpc(row)
                       break
                   end
@@ -2119,11 +2253,19 @@
       instantGeneration = instantGeneration + 1
       instantEnabled, instantLoading = false, false
       if instantCache then
+          local restore = instantOriginal or 1
+          if rodSpeed.restoreOriginal then
+              restore = rodSpeed.original or 1
+              rodSpeed.restoreOriginal = false
+          elseif rodSpeed.enabled and rodSpeed.value then
+              restore = rodSpeed.value
+          end
           local ok, err = pcall(applygc, instantCache,
-              "progressefficiency", instantOriginal or 1)
+              "progressefficiency", restore)
           if not ok then warn("Instant Catch reset: " .. tostring(err)) end
       end
       instantCache, instantOriginal = nil, nil
+      if rodSpeed.enabled then rodSpeed.apply() end
       updateInstantLabel()
   end
   toggleInstant = function()
@@ -2224,6 +2366,7 @@
       if not alive then return end
       alive, enabled = false, false
       disableInstant()
+      rodSpeed.stop()
       equipPending = false
       dragging = false
       releasePanelInput()
