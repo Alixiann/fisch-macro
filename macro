@@ -1553,7 +1553,10 @@
       end
       local value = ismouse1pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
-      local localX = insideDropdown and (x - lastPanelX) / uiScale
+      -- Menu entries are positioned relative to the draggable dropdown, not
+      -- the main panel.  Using lastPanelX here makes the right-side Prev/Next
+      -- hitboxes stop working after the dropdown has been moved.
+      local localX = insideDropdown and (x - dropdownX) / uiScale
           or insideMain and (x - lastPanelX) / uiScale or 0
       local localY = insideDropdown and (y - dropdownY) / uiScale + 388
           or insideMain and (y - lastPanelY) / uiScale or 0
