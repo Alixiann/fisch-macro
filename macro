@@ -10,7 +10,7 @@
   local FAILSAFE = 20
   local KEY_HOLD = 0.06
   local FADE_SECONDS = 0.65
-  local ENVIRONMENT_INTERVAL = 2
+  local ENVIRONMENT_INTERVAL = 1
   local EVENT_SCROLL_SECONDS = 4
   local Players = game:GetService("Players")
   local RS = game:GetService("ReplicatedStorage")
@@ -70,24 +70,56 @@
       ["shiny surge"] = 900,
       ["night of luminous"] = 900,
       ["night of the luminous"] = 900,
+      ["day of luminous"] = 900,
+      ["day of the luminous"] = 900,
       ["night of the fireflies"] = 900,
       ["mutation surge"] = 900,
+      ["nectar bloom"] = 900,
+      ["brine storm"] = 900,
+      ["dripstone collapse"] = 900,
+      ["power burst"] = 900,
+      ["earthquake"] = 600,
+      ["eruption"] = 600,
+      ["blizzard"] = 480,
+      ["avalanche"] = 120,
+      ["zeus storm"] = 300,
+      ["poseidon wrath"] = 360,
+      ["war surge"] = 900,
+      ["solar chorus"] = 900,
+      ["storm flood"] = 900,
+      ["soul scourge"] = 900,
+      ["wisp haunt"] = 900,
+      ["dust storm"] = 900,
+      ["torrential rain"] = 900,
+      ["absolute darkness"] = 600,
   }
   eventFallbackModifiers = {
       ["shiny surge"] = "+3% Shiny chance",
       ["night of luminous"] = "+10% Sparkling chance",
       ["night of the luminous"] = "+10% Sparkling chance",
+      ["day of luminous"] = "+10% Sparkling chance",
+      ["day of the luminous"] = "+10% Sparkling chance",
       ["night of the fireflies"] = "2x Nocturnal catch rate",
-      ["mutation surge"] = "10x Luck",
+      ["mutation surge"] = "+15% Natural Mutation chance",
       ["aurora borealis"] = "7x Luck",
       ["sovereign surge"] = "2x Luck",
+      ["sovereign storm"] = "4x Luck",
+      ["sovereign reckoning"] = "8x Luck",
       ["tropical sun"] = "9x Luck",
-      ["rainbow"] = "Shiny + Sparkling fish",
+      ["rainbow"] = "8x Luck | +5% Shiny | +5% Sparkling",
+      ["starfall"] = "+10% Progress Speed",
+      ["tornado"] = "+20% Lure Speed",
+      ["eclipse"] = "Solar Fragment access",
+      ["frost moon"] = "9x Luck",
   }
   weatherApi = nil
   weatherLibrary = nil
+  localizedEventLibrary = nil
+  eventIconColors = {}
+  eventIconColorsLoaded = false
   localizedEventNames = {
       AbsoluteDarkness = "Absolute Darkness",
+      DepthsAbsoluteDarkness = "Absolute Darkness",
       NectarBloom = "Nectar Bloom",
       BrineStorm = "Brine Storm",
       DripstoneCollapse = "Dripstone Collapse",
@@ -278,7 +310,7 @@
   timerText.Color = Color3.fromRGB(105, 225, 255)
   local clockText = label("Server    --", 12, 93, 12)
   clockText.Color = Color3.fromRGB(190, 145, 255)
-  clockText.Outline = false
+  clockText.Outline = true
   local clockDayBlend = 0.5
   local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 11, 118, 10)
   local eventHeadingOutlineRight = label("WEATHER / EVENTS", 13, 118, 10)
@@ -1965,6 +1997,12 @@
       local events, descriptions = {}, {}
       local seenEvents, seenDescriptions = {}, {}
       local serverNow = now
+      local okClock, valueClock = pcall(function()
+          return os.time()
+      end)
+      if okClock and type(valueClock) == "number" then
+          serverNow = valueClock
+      end
       local okServerNow, valueServerNow = pcall(function()
           return W:GetServerTimeNow()
       end)
@@ -2029,26 +2067,34 @@
           if not name then return end
           local key = name:lower():gsub("%s+", " ")
           local text = name
-          local modifier = eventModifiers[key] or eventFallbackModifiers[key]
+           local modifier = eventFallbackModifiers[key] or eventModifiers[key]
           if modifier then
               text = text .. "\n" .. modifier
           end
-          if type(endTime) == "number" then
-              local remaining = math.max(0, endTime - serverNow)
+          local remaining
+          local directDuration
+          if type(endTime) == "number" and endTime >= 100000000 then
+              remaining = math.max(0, endTime - serverNow)
+          elseif type(endTime) == "number" and endTime > 0 then
+              directDuration = endTime > 1000 and endTime / 1000 or endTime
+          end
+          if not remaining and eventDeadlines[key] then
+              remaining = math.max(0, eventDeadlines[key] - now)
+          elseif not remaining then
+              local duration = directDuration or eventDurations[key]
+              if duration then
+                  if not eventStartTimes[key]
+                      or now - eventStartTimes[key] >= duration then
+                      eventStartTimes[key] = now
+                  end
+                  remaining = math.max(0, duration - (now - eventStartTimes[key]))
+              end
+          end
+          if remaining then
               text = text .. string.format(
                   "\n%02d:%02d remaining",
                   math.floor(remaining / 60), math.floor(remaining % 60)
               )
-          else
-              local duration = eventDurations[key]
-              if duration then
-                  if not eventStartTimes[key] then eventStartTimes[key] = now end
-                  local remaining = math.max(0, duration - (now - eventStartTimes[key]))
-                  text = text .. string.format(
-                      "\n%02d:%02d remaining",
-                      math.floor(remaining / 60), math.floor(remaining % 60)
-                  )
-              end
           end
           include(text)
       end
@@ -2117,16 +2163,39 @@
               end
            end
        end
-       if not weatherApi or not weatherLibrary then
+       if not weatherApi or not weatherLibrary or not localizedEventLibrary then
            pcall(function()
                local shared = RS and RS:FindFirstChild("shared")
                local modules = shared and shared:FindFirstChild("modules")
                local weatherModule = modules and modules:FindFirstChild("SharedWeather")
                local library = modules and modules:FindFirstChild("library")
                local weatherData = library and library:FindFirstChild("weathers")
+               local localizedData = library and library:FindFirstChild("localizedevents")
                if weatherModule and not weatherApi then weatherApi = require(weatherModule) end
                if weatherData and not weatherLibrary then weatherLibrary = require(weatherData) end
+               if localizedData and not localizedEventLibrary then
+                   localizedEventLibrary = require(localizedData)
+               end
            end)
+       end
+       if not eventIconColorsLoaded and (weatherLibrary or localizedEventLibrary) then
+           if weatherLibrary then
+               for weatherName, config in pairs(weatherLibrary) do
+                   if type(config) == "table" then
+                       local color = config.IconColor or config.ChatColor
+                       if color then eventIconColors[weatherName:lower()] = color end
+                   end
+               end
+           end
+           if localizedEventLibrary then
+               for attribute, displayName in pairs(localizedEventNames) do
+                   local config = localizedEventLibrary[attribute]
+                   if config and config.IconColor then
+                       eventIconColors[displayName:lower()] = config.IconColor
+                   end
+               end
+           end
+           eventIconColorsLoaded = true
        end
        if weatherApi and type(weatherApi.GetAllActive) == "function" then
            local okWeather, activeWeather = pcall(function()
@@ -2142,16 +2211,19 @@
        end
        for attribute, displayName in pairs(localizedEventNames) do
            local activeUntil = W:GetAttribute(attribute)
-           if activeUntil ~= nil then
-               local text = displayName
-               if type(activeUntil) == "number" then
-                   local remaining = math.max(0, activeUntil - serverNow)
-                   text = text .. string.format(
-                       "\n%02d:%02d remaining",
-                       math.floor(remaining / 60), math.floor(remaining % 60)
-                   )
+           local numericUntil = tonumber(activeUntil)
+           if numericUntil and numericUntil >= 100000000 then
+               if numericUntil > serverNow then
+                   includeKnown(displayName, numericUntil)
                end
-               include(text)
+           elseif numericUntil and numericUntil > 0 then
+               eventDurations[displayName:lower()] = numericUntil > 1000
+                   and numericUntil / 1000 or numericUntil
+               includeKnown(displayName)
+           elseif activeUntil == true
+               or (type(activeUntil) == "string"
+                   and activeUntil:lower() == "true") then
+               includeKnown(displayName)
            end
        end
        for _, entry in ipairs({
@@ -2307,7 +2379,7 @@
            if timer and not title:find(timer, 1, true) then
                title = title .. "  [" .. timer .. "]"
            end
-           local modifier = eventModifiers[key]
+           local modifier = eventFallbackModifiers[key] or eventModifiers[key]
            if modifier then title = title:gsub("%s+$", "") .. "  |  " .. modifier end
           local row = weatherLines[i - first + 1]
           for j = 1, 4 do
@@ -2335,10 +2407,41 @@
                for j = 1, 4 do row[j].Color = C.bg end
           elseif name:find("meteor", 1, true) then
               row[5].Color = Color3.fromRGB(255, 95, 95)
-          elseif name:find("night", 1, true) then
-              row[5].Color = Color3.fromRGB(125, 185, 255)
-          end
-      end
+           elseif name:find("night", 1, true) then
+               row[5].Color = Color3.fromRGB(125, 185, 255)
+           end
+           local iconColor = eventIconColors[key]
+           if iconColor then row[5].Color = iconColor end
+           if name:find("aurora", 1, true) then
+               row[5].Color = Color3.fromRGB(150, 255, 170)
+           elseif name:find("mutation surge", 1, true) then
+               row[5].Color = Color3.fromRGB(55, 255, 25)
+           elseif name:find("tropical sun", 1, true) then
+               row[5].Color = Color3.fromRGB(255, 195, 60)
+           elseif name:find("eclipse", 1, true) then
+               row[5].Color = Color3.fromRGB(255, 145, 35)
+           elseif name:find("starfall", 1, true) then
+               row[5].Color = Color3.fromRGB(180, 105, 255)
+           elseif name:find("rainbow", 1, true) then
+               row[5].Color = Color3.fromRGB(255, 110, 195)
+           elseif name:find("frost moon", 1, true) then
+               row[5].Color = Color3.fromRGB(150, 220, 255)
+           elseif name:find("sovereign surge", 1, true) then
+               row[5].Color = Color3.fromRGB(105, 215, 255)
+           elseif name:find("sovereign storm", 1, true) then
+               row[5].Color = Color3.fromRGB(125, 115, 230)
+           elseif name:find("sovereign reckoning", 1, true) then
+               row[5].Color = Color3.fromRGB(170, 45, 255)
+           elseif name:find("shiny surge", 1, true)
+               or name:find("night of luminous", 1, true)
+               or name:find("night of the luminous", 1, true)
+               or name:find("day of luminous", 1, true)
+               or name:find("day of the luminous", 1, true) then
+               row[5].Color = Color3.fromRGB(255, 235, 75)
+           elseif name:find("night of fireflies", 1, true) then
+               row[5].Color = Color3.fromRGB(205, 170, 255)
+           end
+       end
       return ""
   end
   local function refreshStats(now)
