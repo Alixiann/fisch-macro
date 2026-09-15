@@ -63,7 +63,6 @@
   local lastDisplay = ""
   local cachedEvents, cachedDescriptions = {}, {}
   eventDeadlines = {}
-  eventTimerReadings = {}
   eventModifiers = {}
   eventStartTimes = {}
   eventDurations = {
@@ -154,6 +153,25 @@
       yellow = Color3.fromRGB(255, 226, 147),
       instantOn = Color3.fromRGB(0, 255, 0),
       instantOff = Color3.fromRGB(255, 0, 0),
+      eventColors = {
+          {"aurora", Color3.fromRGB(150, 255, 170)},
+          {"mutation surge", Color3.fromRGB(55, 255, 25)},
+          {"tropical sun", Color3.fromRGB(255, 235, 145)},
+          {"eclipse", Color3.fromRGB(255, 145, 35)},
+          {"starfall", Color3.fromRGB(180, 105, 255)},
+          {"rainbow", Color3.fromRGB(255, 110, 195)},
+          {"frost moon", Color3.fromRGB(150, 220, 255)},
+          {"sovereign surge", Color3.fromRGB(105, 215, 255)},
+          {"sovereign storm", Color3.fromRGB(125, 115, 230)},
+          {"sovereign reckoning", Color3.fromRGB(170, 45, 255)},
+          {"shiny surge", Color3.fromRGB(255, 235, 75)},
+          {"night of luminous", Color3.fromRGB(255, 235, 75)},
+          {"day of luminous", Color3.fromRGB(255, 235, 75)},
+          {"night of fireflies", Color3.fromRGB(205, 170, 255)},
+          {"power surge", Color3.fromRGB(220, 80, 255)},
+          {"blood moon", Color3.fromRGB(125, 20, 25)},
+          {"meteor", Color3.fromRGB(255, 95, 95)},
+      },
   }
   local PANEL_W, PANEL_H = 260, 430
   local uiScale = 1.25
@@ -174,7 +192,8 @@
       pageSize = 6,
       top = 388,
       drawings = {},
-      slots = {}
+      slots = {},
+      buttonCache = {shakeAt = 0, shake = nil, harpoonAt = 0, harpoon = nil}
   }
   totemMenu.startupIntro = {active = true, started = tick(), amount = 0, drawings = {}}
   local islandMenu = {
@@ -314,26 +333,16 @@
   clockText.Color = Color3.fromRGB(190, 145, 255)
   clockText.Outline = true
   local clockDayBlend = 0.5
-  local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 11, 118, 10)
-  local eventHeadingOutlineRight = label("WEATHER / EVENTS", 13, 118, 10)
-  local eventHeadingOutlineUp = label("WEATHER / EVENTS", 12, 117, 10)
-  local eventHeadingOutlineDown = label("WEATHER / EVENTS", 12, 119, 10)
-  for _, outline in ipairs({
-      eventHeadingOutlineLeft, eventHeadingOutlineRight,
-      eventHeadingOutlineUp, eventHeadingOutlineDown,
-  }) do
-      outline.Color = C.bg
-  end
   local eventHeading = label("WEATHER / EVENTS", 12, 118, 10)
   eventHeading.Color = C.white
   eventHeading.Outline = true
   local weatherLines = {
-      {label("", 11, 133, 10), label("", 13, 133, 10), label("", 12, 132, 10), label("", 12, 134, 10), label("", 12, 133, 10)},
-      {label("", 11, 146, 10), label("", 13, 146, 10), label("", 12, 145, 10), label("", 12, 147, 10), label("", 12, 146, 10)},
-      {label("", 11, 159, 10), label("", 13, 159, 10), label("", 12, 158, 10), label("", 12, 160, 10), label("", 12, 159, 10)},
-      {label("", 11, 172, 10), label("", 13, 172, 10), label("", 12, 171, 10), label("", 12, 173, 10), label("", 12, 172, 10)},
-      {label("", 11, 185, 10), label("", 13, 185, 10), label("", 12, 184, 10), label("", 12, 186, 10), label("", 12, 185, 10)},
-      {label("", 11, 198, 10), label("", 13, 198, 10), label("", 12, 197, 10), label("", 12, 199, 10), label("", 12, 198, 10)},
+      label("", 12, 133, 10),
+      label("", 12, 146, 10),
+      label("", 12, 159, 10),
+      label("", 12, 172, 10),
+      label("", 12, 185, 10),
+      label("", 12, 198, 10),
   }
   local divider = add("Square", 12, 214)
   divider.Size = Vector2.new(PANEL_W - 28, 1)
@@ -691,43 +700,64 @@
   local panelInputCaptured = false
   local leftWasDown = false
   local function activeShakeButton()
+      local cache = totemMenu.buttonCache
+      local now = tick()
+      if now < cache.shakeAt then return cache.shake end
+      cache.shakeAt = now + 0.15
       local currentGui = player:FindFirstChildOfClass("PlayerGui")
       local shakeGui = currentGui and currentGui:FindFirstChild("shakeui")
-      if not shakeGui then return nil end
-      local function visibleInTree(object)
-          local node = object
-          while node and node ~= shakeGui do
-              local ok, visible = pcall(function() return node.Visible end)
-              if ok and visible == false then return false end
-              node = node.Parent
-          end
-          return true
-      end
-      local function hasShakeText(object)
-          local ok, value = pcall(function() return object.Text end)
-          return ok and type(value) == "string"
-              and value:lower():find("shake", 1, true) ~= nil
-      end
+      if not shakeGui then cache.shake = nil; return nil end
+      local found
       for _, object in ipairs(shakeGui:GetDescendants()) do
-          if (object:IsA("GuiButton") or object:IsA("TextLabel"))
-              and visibleInTree(object) and hasShakeText(object) then
-              local node = object
-              while node and node ~= shakeGui do
-                  if node:IsA("GuiButton") then return node end
-                  node = node.Parent
+          local class = object.ClassName
+          if class == "GuiButton" or class == "TextButton"
+              or class == "ImageButton" or class == "TextLabel" then
+              local okText, text = pcall(function() return object.Text end)
+              if okText and type(text) == "string"
+                  and text:lower():find("shake", 1, true) then
+                  local visible, node = true, object
+                  while node and node ~= shakeGui do
+                      local okVisible, value = pcall(function() return node.Visible end)
+                      if okVisible and value == false then
+                          visible = false
+                          break
+                      end
+                      node = node.Parent
+                  end
+                  if visible then
+                      node = object
+                      while node and node ~= shakeGui do
+                          local nodeClass = node.ClassName
+                          if nodeClass == "GuiButton" or nodeClass == "TextButton"
+                              or nodeClass == "ImageButton" then
+                              found = node
+                              break
+                          end
+                          node = node.Parent
+                      end
+                      if not found and (class == "GuiButton"
+                          or class == "TextButton" or class == "ImageButton") then
+                          found = object
+                      end
+                  end
               end
-              if object:IsA("GuiButton") then return object end
           end
+          if found then break end
       end
-      return nil
+      cache.shake = found
+      return found
   end
   local function activeHarpoonPullButton()
+      local cache = totemMenu.buttonCache
+      local now = tick()
+      if now < cache.harpoonAt then return cache.harpoon end
+      cache.harpoonAt = now + 0.15
       local currentGui = player:FindFirstChildOfClass("PlayerGui")
-      if not currentGui then return nil end
+      if not currentGui then cache.harpoon = nil; return nil end
       local minigame = currentGui:FindFirstChild("harpoonMinigame")
       local safezone = minigame and minigame:FindFirstChild("safezone")
-      if not safezone then return nil end
-      local newest
+      if not safezone then cache.harpoon = nil; return nil end
+      local found
       for _, object in ipairs(safezone:GetChildren()) do
           local objectName = tostring(object.Name):lower()
           if object.ClassName == "ImageButton" and objectName:find("pull", 1, true) then
@@ -737,13 +767,12 @@
                   local textOk, text = pcall(function() return title and title.Text end)
                   local normalized = textOk and type(text) == "string"
                       and text:upper():gsub("[^%a]", "") or ""
-                  if normalized == "PULL" then
-                      newest = object
-                  end
+                  if normalized == "PULL" then found = object end
               end
           end
       end
-      return newest
+      cache.harpoon = found
+      return found
   end
   local function moveMouseFast(x, y)
       if type(mousemoveabs) == "function" then
@@ -872,20 +901,20 @@
           local originX = isMenuEntry and dropdownX or x
           local originY = isMenuEntry and (dropdownY - 388 * uiScale) or y
           entry.d.Position = Vector2.new(originX + entry.x * uiScale, originY + entry.y * uiScale)
-          local ok, size = pcall(function() return entry.d.Size end)
-          if ok and size then
-              if entry.baseSize == nil then
+          if entry.baseSize == nil then
+              local ok, size = pcall(function() return entry.d.Size end)
+              if ok and size then
                   if type(size) == "number" then
                       entry.baseSize = size
                   elseif size.X and size.Y then
                       entry.baseSize = Vector2.new(size.X, size.Y)
                   end
               end
-              if type(entry.baseSize) == "number" then
-                  entry.d.Size = entry.baseSize * uiScale
-              elseif entry.baseSize then
-                  entry.d.Size = entry.baseSize * uiScale
-              end
+          end
+          if type(entry.baseSize) == "number" then
+              entry.d.Size = entry.baseSize * uiScale
+          elseif entry.baseSize then
+              entry.d.Size = entry.baseSize * uiScale
           end
       end
       border.Size = Vector2.new(drawW, drawH)
@@ -1688,7 +1717,7 @@
                   warn("Fish ESP scan: " .. tostring(err))
               end
           end
-          task.wait(fishEsp.enabled and 0.02 or 0.05)
+          task.wait(fishEsp.enabled and 0.04 or 0.10)
       end
   end)
   task.spawn(function()
@@ -1696,7 +1725,7 @@
           if fishEsp.enabled then
               pcall(fishEsp.update, tick())
           end
-          task.wait(1 / 60)
+          task.wait(fishEsp.enabled and 1 / 30 or 0.10)
       end
   end)
   local function teleportCustomGps()
@@ -2068,10 +2097,14 @@
           if minutes and seconds then
               local remaining = tonumber(minutes) * 60 + tonumber(seconds)
               local deadline = eventDeadlines[key]
-              if not deadline or remaining ~= eventTimerReadings[key] then
-                  eventDeadlines[key] = now + remaining
+              local candidate = now + remaining
+              -- HUD labels can lag each other by a fraction of a second.
+              -- Keep the cached deadline through small jitter instead of
+              -- repeatedly snapping the countdown backward and forward.
+              if not deadline or deadline <= now
+                  or math.abs(candidate - deadline) > 2 then
+                  eventDeadlines[key] = candidate
               end
-              eventTimerReadings[key] = remaining
           end
           local index = seenEvents[key]
           if not index then
@@ -2097,9 +2130,16 @@
           elseif type(endTime) == "number" and endTime > 0 then
               directDuration = endTime > 1000 and endTime / 1000 or endTime
           end
+          if remaining and remaining <= 0 then remaining = nil end
           if not remaining and eventDeadlines[key] then
-              remaining = math.max(0, eventDeadlines[key] - now)
-          elseif not remaining then
+              local cachedRemaining = eventDeadlines[key] - now
+              if cachedRemaining > 0 then
+                  remaining = cachedRemaining
+              else
+                  eventDeadlines[key] = nil
+              end
+          end
+          if not remaining then
               local duration = directDuration or eventDurations[key]
               if duration then
                   if not eventStartTimes[key]
@@ -2123,43 +2163,24 @@
       if statuses then
           for _, entry in ipairs(statuses:GetChildren()) do
               local name = entry.Name:lower()
-              local readable = false
               if not name:find("cycle", 1, true)
                   and not name:find("season", 1, true) then
                   for _, item in ipairs(entry:GetDescendants()) do
-                      if item.ClassName == "TextLabel"
-                          and item.Name:lower():find("tooltip", 1, true) then
-                          local current = item:GetAttribute("CurrentText")
-                           local text = cleanText(current) or cleanText(item.Text)
-                           if text then
-                               include(text)
-                               if name == "event1" then
+                      if item.ClassName == "TextLabel" then
+                          local text = cleanText(item:GetAttribute("CurrentText"))
+                              or cleanText(item.Text)
+                          if text and item.Name:lower():find("tooltip", 1, true) then
+                              include(text)
+                              if name == "event1" then
                                   local cachedTitle = text:match("[^\n]+") or ""
                                   if not cachedTitle:lower():find("name unavailable", 1, true) then
                                       eventStatusCacheText = text
                                       eventStatusCacheName = cachedTitle
                                   end
-                               end
-                              readable = true
-                          end
-                      end
-                  end
-                  if not readable and entry.ClassName == "Frame" then
-                      if name:match("^event%d+$") then
-                          -- Direct replicated state or the cached event text supplies the name.
-                      elseif name:match("^adminevent%d+$") then
-                          -- Admin event names are handled by their own replicated value.
-                      elseif name:match("^localizedevent%d+$") then
-                          -- Local event names are handled by Workspace attributes.
-                      end
-                  end
-                  if name:find("event", 1, true) then
-                      for _, item in ipairs(entry:GetDescendants()) do
-                          if item.ClassName == "TextLabel" then
-                              local text = cleanText(item:GetAttribute("CurrentText"))
-                                  or cleanText(item.Text)
-                              local lower = text and text:lower() or ""
-                              if text and lower ~= "weather status"
+                              end
+                          elseif text and name:find("event", 1, true) then
+                              local lower = text:lower()
+                              if lower ~= "weather status"
                                   and not lower:find("failed to fetch", 1, true) then
                                   include(text)
                               end
@@ -2168,11 +2189,6 @@
                   end
               end
           end
-      end
-      local function includeName(value)
-          value = cleanText(value)
-          if not value then return end
-          include(value)
       end
        for _, name in ipairs({
            "weather", "clientWeather", "event", "admin_event", "AdminEventText"
@@ -2203,12 +2219,13 @@
                end
               for _, group in ipairs(slot:GetDescendants()) do
                   if group.ClassName == "StringValue" then
-                      includeName(group.Value)
+                      include(group.Value)
                   end
               end
            end
        end
-       if not weatherApi or not weatherLibrary or not localizedEventLibrary then
+       if not eventIconColors._loadAttempted then
+           eventIconColors._loadAttempted = true
            pcall(function()
                local shared = RS and RS:FindFirstChild("shared")
                local modules = shared and shared:FindFirstChild("modules")
@@ -2280,21 +2297,19 @@
       }) do
           local flag = world and world:FindFirstChild(entry[1])
           if flag and flag.ClassName == "BoolValue" and flag.Value == true then
-              includeName(entry[2])
+              include(entry[2])
           end
       end
-      for _, root in ipairs({world, RS and RS:FindFirstChild("world")}) do
-          if root then
-              for _, flag in ipairs(root:GetDescendants()) do
-                  if flag.ClassName == "BoolValue" and flag.Value == true then
-                      local n = flag.Name:lower():gsub("[^%w]", "")
-                      if n:find("meteor", 1, true) and n:find("active", 1, true) then
-                          includeName("Meteor")
-                      elseif n:find("absolute", 1, true)
-                          and n:find("dark", 1, true)
-                          and n:find("active", 1, true) then
-                          includeName("Absolute Darkness")
-                      end
+      if world then
+          for _, flag in ipairs(world:GetDescendants()) do
+              if flag.ClassName == "BoolValue" and flag.Value == true then
+                  local n = flag.Name:lower():gsub("[^%w]", "")
+                  if n:find("meteor", 1, true) and n:find("active", 1, true) then
+                      include("Meteor")
+                  elseif n:find("absolute", 1, true)
+                      and n:find("dark", 1, true)
+                      and n:find("active", 1, true) then
+                      include("Absolute Darkness")
                   end
               end
           end
@@ -2402,17 +2417,7 @@
   local function environmentText(events, now)
       if #events == 0 then
           eventHeading.Text = "WEATHER / EVENTS"
-          eventHeadingOutlineLeft.Text = eventHeading.Text
-          eventHeadingOutlineRight.Text = eventHeading.Text
-          eventHeadingOutlineUp.Text = eventHeading.Text
-          eventHeadingOutlineDown.Text = eventHeading.Text
-           eventHeadingOutlineLeft.Color = C.bg
-           eventHeadingOutlineRight.Color = C.bg
-           eventHeadingOutlineUp.Color = C.bg
-           eventHeadingOutlineDown.Color = C.bg
-          for _, row in ipairs(weatherLines) do
-              for _, line in ipairs(row) do line.Text = "" end
-          end
+          for _, line in ipairs(weatherLines) do line.Text = "" end
           return "Unavailable"
       end
       local perPage = 6
@@ -2424,13 +2429,7 @@
           "WEATHER / EVENTS  %d ACTIVE%s", #events,
           pages > 1 and string.format("  %d/%d", page + 1, pages) or ""
       )
-      eventHeadingOutlineLeft.Text = eventHeading.Text
-      eventHeadingOutlineRight.Text = eventHeading.Text
-      eventHeadingOutlineUp.Text = eventHeading.Text
-      eventHeadingOutlineDown.Text = eventHeading.Text
-      for _, row in ipairs(weatherLines) do
-          for _, line in ipairs(row) do line.Text = "" end
-      end
+      for _, line in ipairs(weatherLines) do line.Text = "" end
       local rowSlot = 1
       for i = first, last do
           if rowSlot > #weatherLines then break end
@@ -2451,105 +2450,20 @@
            if modifier then title = title:gsub("%s+$", "") .. "  |  " .. modifier end
            local firstTitle, secondTitle = wrapEventTitle(title)
            local row = weatherLines[rowSlot]
-           for j = 1, 4 do
-               row[j].Text = firstTitle
-                row[j].Color = C.bg
+           row.Text = firstTitle
+           local name = title:lower()
+           local rowColor = eventIconColors[key] or C.white
+           for _, mapping in ipairs(C.eventColors) do
+               if name:find(mapping[1], 1, true) then
+                   rowColor = mapping[2]
+                   break
+               end
            end
-           row[5].Text = firstTitle
-          row[5].Color = C.white
-          local name = title:lower()
-          if name:find("aurora", 1, true) then
-              row[5].Color = Color3.fromRGB(115, 255, 145)
-          elseif name:find("sovereign storm", 1, true) then
-              row[5].Color = Color3.fromRGB(75, 25, 125)
-               for j = 1, 4 do row[j].Color = C.bg end
-          elseif name:find("sovereign surge", 1, true) then
-              row[5].Color = Color3.fromRGB(70, 190, 255)
-          elseif name:find("night of luminous", 1, true)
-              or name:find("shiny surge", 1, true) then
-              row[5].Color = Color3.fromRGB(255, 225, 90)
-          elseif name:find("power surge", 1, true) then
-              row[5].Color = Color3.fromRGB(220, 80, 255)
-          elseif name:find("eclipse", 1, true)
-              or name:find("blood moon", 1, true) then
-              row[5].Color = Color3.fromRGB(125, 20, 25)
-               for j = 1, 4 do row[j].Color = C.bg end
-          elseif name:find("meteor", 1, true) then
-              row[5].Color = Color3.fromRGB(255, 95, 95)
-           elseif name:find("night", 1, true) then
-               row[5].Color = Color3.fromRGB(125, 185, 255)
-           end
-           local iconColor = eventIconColors[key]
-           if iconColor then row[5].Color = iconColor end
-           if name:find("aurora", 1, true) then
-               row[5].Color = Color3.fromRGB(150, 255, 170)
-           elseif name:find("mutation surge", 1, true) then
-               row[5].Color = Color3.fromRGB(55, 255, 25)
-           elseif name:find("tropical sun", 1, true) then
-               row[5].Color = Color3.fromRGB(255, 235, 145)
-           elseif name:find("eclipse", 1, true) then
-               row[5].Color = Color3.fromRGB(255, 145, 35)
-           elseif name:find("starfall", 1, true) then
-               row[5].Color = Color3.fromRGB(180, 105, 255)
-           elseif name:find("rainbow", 1, true) then
-               row[5].Color = Color3.fromRGB(255, 110, 195)
-           elseif name:find("frost moon", 1, true) then
-               row[5].Color = Color3.fromRGB(150, 220, 255)
-           elseif name:find("sovereign surge", 1, true) then
-               row[5].Color = Color3.fromRGB(105, 215, 255)
-           elseif name:find("sovereign storm", 1, true) then
-               row[5].Color = Color3.fromRGB(125, 115, 230)
-           elseif name:find("sovereign reckoning", 1, true) then
-               row[5].Color = Color3.fromRGB(170, 45, 255)
-           elseif name:find("shiny surge", 1, true)
-               or name:find("night of luminous", 1, true)
-               or name:find("night of the luminous", 1, true)
-               or name:find("day of luminous", 1, true)
-               or name:find("day of the luminous", 1, true) then
-               row[5].Color = Color3.fromRGB(255, 235, 75)
-           elseif name:find("night of fireflies", 1, true) then
-               row[5].Color = Color3.fromRGB(205, 170, 255)
-           end
+           row.Color = rowColor
            if secondTitle and rowSlot < #weatherLines then
                local secondRow = weatherLines[rowSlot + 1]
-               local secondColor = C.white
-               if name:find("aurora", 1, true) then
-                   secondColor = Color3.fromRGB(150, 255, 170)
-               elseif name:find("mutation surge", 1, true) then
-                   secondColor = Color3.fromRGB(55, 255, 25)
-               elseif name:find("tropical sun", 1, true) then
-                   secondColor = Color3.fromRGB(255, 235, 145)
-               elseif name:find("eclipse", 1, true) then
-                   secondColor = Color3.fromRGB(255, 145, 35)
-               elseif name:find("starfall", 1, true) then
-                   secondColor = Color3.fromRGB(180, 105, 255)
-               elseif name:find("rainbow", 1, true) then
-                   secondColor = Color3.fromRGB(255, 110, 195)
-               elseif name:find("frost moon", 1, true) then
-                   secondColor = Color3.fromRGB(150, 220, 255)
-               elseif name:find("sovereign surge", 1, true) then
-                   secondColor = Color3.fromRGB(105, 215, 255)
-               elseif name:find("sovereign storm", 1, true) then
-                   secondColor = Color3.fromRGB(125, 115, 230)
-               elseif name:find("sovereign reckoning", 1, true) then
-                   secondColor = Color3.fromRGB(170, 45, 255)
-               elseif name:find("shiny surge", 1, true)
-                   or name:find("night of luminous", 1, true)
-                   or name:find("night of the luminous", 1, true)
-                   or name:find("day of luminous", 1, true)
-                   or name:find("day of the luminous", 1, true) then
-                   secondColor = Color3.fromRGB(255, 235, 75)
-               elseif name:find("night of fireflies", 1, true) then
-                   secondColor = Color3.fromRGB(205, 170, 255)
-               elseif eventIconColors[key] then
-                   secondColor = eventIconColors[key]
-               end
-               for j = 1, 4 do
-                   secondRow[j].Text = secondTitle
-                   secondRow[j].Color = C.bg
-               end
-               secondRow[5].Text = secondTitle
-               secondRow[5].Color = secondColor
+               secondRow.Text = secondTitle
+               secondRow.Color = rowColor
                rowSlot = rowSlot + 2
            else
                rowSlot = rowSlot + 1
@@ -3068,7 +2982,7 @@
               updateDropdownAnimation(now)
               totemMenu.updateStartupIntro(now)
               updateFade(now)
-              task.wait(0.01)
+              task.wait(0.016)
           end
       end)
       if not ok then
