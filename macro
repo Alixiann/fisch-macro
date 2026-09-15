@@ -64,6 +64,48 @@
   local cachedEvents, cachedDescriptions = {}, {}
   eventDeadlines = {}
   eventTimerReadings = {}
+  eventModifiers = {}
+  eventStartTimes = {}
+  eventDurations = {
+      ["shiny surge"] = 900,
+      ["night of luminous"] = 900,
+      ["night of the luminous"] = 900,
+      ["night of the fireflies"] = 900,
+      ["mutation surge"] = 900,
+  }
+  eventFallbackModifiers = {
+      ["shiny surge"] = "+3% Shiny chance",
+      ["night of luminous"] = "+10% Sparkling chance",
+      ["night of the luminous"] = "+10% Sparkling chance",
+      ["night of the fireflies"] = "2x Nocturnal catch rate",
+      ["mutation surge"] = "10x Luck",
+      ["aurora borealis"] = "7x Luck",
+      ["sovereign surge"] = "2x Luck",
+      ["tropical sun"] = "9x Luck",
+      ["rainbow"] = "Shiny + Sparkling fish",
+  }
+  weatherApi = nil
+  weatherLibrary = nil
+  localizedEventNames = {
+      AbsoluteDarkness = "Absolute Darkness",
+      NectarBloom = "Nectar Bloom",
+      BrineStorm = "Brine Storm",
+      DripstoneCollapse = "Dripstone Collapse",
+      PowerBurst = "Power Burst",
+      Earthquake = "Earthquake",
+      Eruption = "Eruption",
+      Blizzard = "Blizzard",
+      Avalanche = "Avalanche",
+      ZeusStorm = "Zeus Storm",
+      PoseidonWrath = "Poseidon Wrath",
+      WarSurge = "War Surge",
+      SolarChorus = "Solar Chorus",
+      StormFlood = "Storm Flood",
+      SoulScourge = "Soul Scourge",
+      WispHaunt = "Wisp Haunt",
+      DustStorm = "Dust Storm",
+      TorrentialRain = "Torrential Rain",
+  }
   local nextEnvironment = 0
   local C = {
       bg = Color3.fromRGB(55, 65, 83),
@@ -1922,6 +1964,13 @@
       world = RS and RS:FindFirstChild("world") or nil
       local events, descriptions = {}, {}
       local seenEvents, seenDescriptions = {}, {}
+      local serverNow = now
+      local okServerNow, valueServerNow = pcall(function()
+          return W:GetServerTimeNow()
+      end)
+      if okServerNow and type(valueServerNow) == "number" then
+          serverNow = valueServerNow
+      end
       local function describe(value)
           value = cleanText(value)
           if not value then return end
@@ -1931,28 +1980,77 @@
               descriptions[#descriptions + 1] = value
           end
       end
-       local function include(value)
-           value = cleanText(value)
-           if not value then return end
-           describe(value)
-           local title = value:match("[^\n]+") or value
-           local key = title:lower():gsub("%s+", " ")
-           local minutes, seconds = value:match("(%d+):(%d%d)%s*[rR]emaining")
-           if minutes and seconds then
-               local remaining = tonumber(minutes) * 60 + tonumber(seconds)
-               local deadline = eventDeadlines[key]
-               if not deadline or remaining ~= eventTimerReadings[key] then
-                   eventDeadlines[key] = now + remaining
-               end
-               eventTimerReadings[key] = remaining
-           end
-           local index = seenEvents[key]
+      local function include(value)
+          value = cleanText(value)
+          if not value then return end
+          describe(value)
+          local title = value:match("[^\n]+") or value
+          local key = title:lower():gsub("%s+", " ")
+          for line in value:gmatch("[^\n]+") do
+              local lower = line:lower()
+              if line ~= title and not lower:find("remaining", 1, true)
+                  and (line:find("%", 1, true)
+                      or line:find("×", 1, true)
+                      or lower:match("%d+%s*x")
+                      or lower:find("luck", 1, true)
+                      or lower:find("chance", 1, true)
+                      or lower:find("speed", 1, true)
+                      or lower:find("mutation", 1, true)) then
+                  local parsedModifier = line:gsub("×", "x")
+                  if not eventModifiers[key] or #parsedModifier > #eventModifiers[key] then
+                      eventModifiers[key] = parsedModifier
+                  end
+                  local fallbackModifier = eventFallbackModifiers[key]
+                  if fallbackModifier and (not eventModifiers[key] or #fallbackModifier > #eventModifiers[key]) then
+                      eventModifiers[key] = fallbackModifier
+                  end
+                  break
+              end
+          end
+          local minutes, seconds = value:match("(%d+):(%d%d)%s*[rR]emaining")
+          if minutes and seconds then
+              local remaining = tonumber(minutes) * 60 + tonumber(seconds)
+              local deadline = eventDeadlines[key]
+              if not deadline or remaining ~= eventTimerReadings[key] then
+                  eventDeadlines[key] = now + remaining
+              end
+              eventTimerReadings[key] = remaining
+          end
+          local index = seenEvents[key]
           if not index then
               events[#events + 1] = value
               seenEvents[key] = #events
           elseif #value > #events[index] then
               events[index] = value
           end
+      end
+      local function includeKnown(name, endTime)
+          name = cleanText(name)
+          if not name then return end
+          local key = name:lower():gsub("%s+", " ")
+          local text = name
+          local modifier = eventModifiers[key] or eventFallbackModifiers[key]
+          if modifier then
+              text = text .. "\n" .. modifier
+          end
+          if type(endTime) == "number" then
+              local remaining = math.max(0, endTime - serverNow)
+              text = text .. string.format(
+                  "\n%02d:%02d remaining",
+                  math.floor(remaining / 60), math.floor(remaining % 60)
+              )
+          else
+              local duration = eventDurations[key]
+              if duration then
+                  if not eventStartTimes[key] then eventStartTimes[key] = now end
+                  local remaining = math.max(0, duration - (now - eventStartTimes[key]))
+                  text = text .. string.format(
+                      "\n%02d:%02d remaining",
+                      math.floor(remaining / 60), math.floor(remaining % 60)
+                  )
+              end
+          end
+          include(text)
       end
       local hud = gui and gui:FindFirstChild("hud")
       local safe = hud and hud:FindFirstChild("safezone")
@@ -2004,32 +2102,59 @@
           if not value then return end
           include(value)
       end
-      for _, name in ipairs({
-          "weather", "clientWeather", "event", "admin_event", "AdminEventText"
-      }) do
+       for _, name in ipairs({
+           "weather", "clientWeather", "event", "admin_event", "AdminEventText"
+       }) do
           local slot = world and world:FindFirstChild(name)
           if slot then
-              if slot.ClassName == "StringValue" then
-                  includeName(slot.Value)
+               if slot.ClassName == "StringValue" then
+                   includeKnown(slot.Value, slot:GetAttribute("EndTime"))
               end
               for _, group in ipairs(slot:GetDescendants()) do
                   if group.ClassName == "StringValue" then
                       includeName(group.Value)
                   end
               end
-          end
-      end
-      local active = W:FindFirstChild("active")
-      local constant = active and active:FindFirstChild("constant")
-      local aurora = constant and constant:FindFirstChild("Aurora Borealis")
-      if aurora and aurora.ClassName == "Model" then
-          local effect = aurora:FindFirstChild("Aurora Borealis")
-          local beam = effect and effect:FindFirstChild("beam")
-          if beam and beam.ClassName == "Beam" then
-              includeName("Aurora Borealis")
-          end
-      end
-      for _, entry in ipairs({
+           end
+       end
+       if not weatherApi or not weatherLibrary then
+           pcall(function()
+               local shared = RS and RS:FindFirstChild("shared")
+               local modules = shared and shared:FindFirstChild("modules")
+               local weatherModule = modules and modules:FindFirstChild("SharedWeather")
+               local library = modules and modules:FindFirstChild("library")
+               local weatherData = library and library:FindFirstChild("weathers")
+               if weatherModule and not weatherApi then weatherApi = require(weatherModule) end
+               if weatherData and not weatherLibrary then weatherLibrary = require(weatherData) end
+           end)
+       end
+       if weatherApi and type(weatherApi.GetAllActive) == "function" then
+           local okWeather, activeWeather = pcall(function()
+               return weatherApi.GetAllActive()
+           end)
+           if okWeather and type(activeWeather) == "table" then
+               for _, weatherName in ipairs(activeWeather) do
+                   local config = weatherLibrary and weatherLibrary[weatherName]
+                   local displayName = config and (config.DisplayName or config.Name) or weatherName
+                   includeKnown(displayName)
+               end
+           end
+       end
+       for attribute, displayName in pairs(localizedEventNames) do
+           local activeUntil = W:GetAttribute(attribute)
+           if activeUntil ~= nil then
+               local text = displayName
+               if type(activeUntil) == "number" then
+                   local remaining = math.max(0, activeUntil - serverNow)
+                   text = text .. string.format(
+                       "\n%02d:%02d remaining",
+                       math.floor(remaining / 60), math.floor(remaining % 60)
+                   )
+               end
+               include(text)
+           end
+       end
+       for _, entry in ipairs({
           {"meteor_active", "Meteor"},
           {"blizzard_active", "Blizzard"},
           {"absolute_darkness_active", "Absolute Darkness"},
@@ -2179,9 +2304,11 @@
            ) or events[i]:match("(%d%d?:%d%d)")
                or events[i]:match("(%d+)%s*[sS]ec")
                or events[i]:match("(%d+)%s*[mM]in")
-          if timer and not title:find(timer, 1, true) then
-              title = title .. "  [" .. timer .. "]"
-          end
+           if timer and not title:find(timer, 1, true) then
+               title = title .. "  [" .. timer .. "]"
+           end
+           local modifier = eventModifiers[key]
+           if modifier then title = title:gsub("%s+$", "") .. "  |  " .. modifier end
           local row = weatherLines[i - first + 1]
           for j = 1, 4 do
               row[j].Text = title
