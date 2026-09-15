@@ -8,7 +8,6 @@
   local castMode = "Instant"
   local RETRY = 2
   local FAILSAFE = 20
-  local ENTER_INTERVAL = 0.10
   local KEY_HOLD = 0.06
   local FADE_SECONDS = 0.65
   local ENVIRONMENT_INTERVAL = 2
@@ -78,7 +77,7 @@
       instantOn = Color3.fromRGB(0, 255, 0),
       instantOff = Color3.fromRGB(255, 0, 0),
   }
-  local PANEL_W, PANEL_H = 260, 410
+  local PANEL_W, PANEL_H = 260, 430
   local uiScale = 1.05
   local MIN_UI_SCALE = 0.80
   local MAX_UI_SCALE = 1.30
@@ -116,8 +115,7 @@
   previous.fishEsp = {
       box = nil, input = nil, toggle = nil, status = nil,
       text = "", editing = false, enabled = false, keys = {}, drawings = {},
-      nextScan = 0, nextDraw = 0, resolvedName = nil, targets = {},
-      nameCache = {}, cacheReady = false, cacheAt = 0,
+      targets = {},
   }
   fishEsp = previous.fishEsp
   local function add(kind, x, y, baseOpacity)
@@ -140,12 +138,6 @@
   bg.Size = Vector2.new(PANEL_W, PANEL_H)
   bg.Color = C.bg
   bg.Filled = true
-  local menuBackdrop = add("Square", 0, 388, 0)
-  menuBackdrop.Size = Vector2.new(PANEL_W, 32)
-  menuBackdrop.Color = C.bg
-  menuBackdrop.Filled = true
-  menuBackdrop.Visible = false
-  local menuBackdropLayout = layout[#layout]
   teleportWindow = {x = nil, y = nil, dragging = false, offsetX = 0, offsetY = 0}
   teleportWindow.bg = Drawing.new("Square")
   teleportWindow.bg.Color = C.bg
@@ -269,35 +261,50 @@
   divider.Size = Vector2.new(PANEL_W - 28, 1)
   divider.Color = C.line
   divider.Filled = true
-  local macroText = label("Macro OFF", 12, 224, 10)
+  automationMenuOpen = false
+  automationMenuDrawings = {}
+  automationToggleText = label("Automation", 12, 221, 10)
+  automationToggleText.Color = C.cyan
+  automationArrow = label("^", 236, 219, 14)
+  automationArrow.Color = C.cyan
+  local automationX, automationBindX = 12, 140
+  local macroText = label("Macro OFF", automationX, 242, 10)
   macroText.Color = C.instantOff
-  label("Keybind: R-Ctrl", 140, 224, 8)
-  local instantText = label("Instant catch OFF", 12, 245, 10)
+  automationMenuDrawings[macroText] = true
+  automationKeybindCtrl = label("Keybind: R-Ctrl", automationBindX, 242, 8)
+  automationMenuDrawings[automationKeybindCtrl] = true
+  local instantText = label("Instant catch OFF", automationX, 263, 10)
   instantText.Color = C.instantOff
-  label("Keybind: R-Alt", 140, 245, 8)
-  local castModeText = label("Instant cast", 12, 266, 10)
+  automationMenuDrawings[instantText] = true
+  automationKeybindAlt = label("Keybind: R-Alt", automationBindX, 263, 8)
+  automationMenuDrawings[automationKeybindAlt] = true
+  local castModeText = label("Instant cast", automationX, 317, 10)
   castModeText.Color = C.instantOff
-  npcMenuDrawings[label("(catch a fish before", 14, 397, 9)] = -397
-  npcMenuDrawings[label("enabling instant catch)", 14, 409, 9)] = -409
-  local harpoonPullText = label("Harpoon Pull OFF", 12, 287, 10)
+  automationMenuDrawings[castModeText] = true
+  instantCatchNote = label("Catch a fish before Instant Catch", automationX, 276, 7)
+  instantCatchNote.Color = C.muted
+  automationMenuDrawings[instantCatchNote] = true
+  local harpoonPullText = label("Harpoon Pull OFF", automationX, 296, 10)
   harpoonPullText.Color = C.instantOff
-  label("Keybind: [", 140, 287, 8)
-  fishEsp.heading = label("Fish ESP", 12, 307, 10)
+  automationMenuDrawings[harpoonPullText] = true
+  automationKeybindHarpoon = label("Keybind: [", automationBindX, 296, 8)
+  automationMenuDrawings[automationKeybindHarpoon] = true
+  fishEsp.heading = label("Fish ESP", 12, 339, 10)
   fishEsp.heading.Color = C.cyan
-  fishEsp.box = add("Square", 12, 323)
+  fishEsp.box = add("Square", 12, 355)
   fishEsp.box.Size = Vector2.new(PANEL_W - 24, 22)
   fishEsp.box.Color = Color3.fromRGB(35, 42, 56)
   fishEsp.box.Filled = true
-  fishEsp.input = label("fish names, separated by commas", 18, 328, 9)
+  fishEsp.input = label("fish names, separated by commas", 18, 360, 9)
   fishEsp.input.Color = C.muted
-  fishEsp.toggle = label("Fish ESP OFF", 12, 350, 10)
+  fishEsp.toggle = label("Fish ESP OFF", 12, 382, 10)
   fishEsp.toggle.Color = C.instantOff
-  fishEsp.status = label("", 120, 350, 8)
+  fishEsp.status = label("", 120, 382, 8)
   fishEsp.status.Color = C.muted
   local harpoonToggleLast = 0
-  local npcToggleText = label("Teleports", 12, 374, 10)
+  local npcToggleText = label("Teleports", 12, 407, 10)
   npcToggleText.Color = C.cyan
-  local npcArrow = label("v", 236, 372, 14)
+  local npcArrow = label("v", 236, 405, 14)
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
@@ -609,8 +616,7 @@
           customGpsFallbackButton.Visible = visible
       end
       for _, entry in ipairs(layout) do
-          local isMenuEntry = entry.d == menuBackdrop
-              or npcMenuDrawings[entry.d] or totemMenu.drawings[entry.d]
+          local isMenuEntry = npcMenuDrawings[entry.d] or totemMenu.drawings[entry.d]
               or islandMenu.drawings[entry.d] or entry.d == totemMenu.title
               or entry.d == totemMenu.arrow or entry.d == islandMenu.title
               or entry.d == islandMenu.arrow
@@ -709,7 +715,9 @@
       end
       for _, entry in ipairs(layout) do
           local menuAlpha = 1
-          if npcMenuDrawings[entry.d] then
+          if automationMenuDrawings[entry.d] then
+              menuAlpha = automationMenuOpen and 1 or 0
+          elseif npcMenuDrawings[entry.d] then
               menuAlpha = npcMenuDrawings[entry.d] < 0
                   and (1 - npcMenuAnim) or npcMenuAnim
               if npcMenuDrawings[entry.d] >= 480 then
@@ -722,8 +730,6 @@
           elseif entry.d == totemMenu.title or entry.d == totemMenu.arrow
               or entry.d == islandMenu.title or entry.d == islandMenu.arrow then
               menuAlpha = npcMenuAnim
-          elseif entry.d == menuBackdrop then
-              menuAlpha = math.max(npcMenuAnim, totemMenu.anim)
           end
           entry.d.Transparency = entry.opacity * fadeAmount * menuAlpha
           entry.d.Visible = fadeAmount > 0.001 and menuAlpha > 0.001
@@ -939,16 +945,26 @@
       npcSubArrow.Text = npcSubOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
       islandMenu.arrow.Text = islandMenu.open and "^" or "v"
-      PANEL_H = 410
+      local automationOffset = automationMenuOpen and 0 or -74
+      PANEL_H = 430 + automationOffset
+      local compactPositions = {
+          [fishEsp.heading] = 339,
+          [fishEsp.box] = 355,
+          [fishEsp.input] = 360,
+          [fishEsp.toggle] = 382,
+          [fishEsp.status] = 382,
+          [npcToggleText] = 407,
+          [npcArrow] = 405,
+      }
+      for _, entry in ipairs(layout) do
+          local base = compactPositions[entry.d]
+          if base then entry.y = base + automationOffset end
+      end
       for _, entry in ipairs(layout) do
           if entry.d == bg or entry.d == border then
               entry.baseSize = Vector2.new(PANEL_W, PANEL_H)
           end
       end
-      local backdropHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388)
-      menuBackdropLayout.y = 388
-      menuBackdropLayout.baseSize = Vector2.new(PANEL_W, backdropHeight)
-      menuBackdrop.Visible = false
       for _, entry in ipairs(layout) do
           if entry.d == totemMenu.title then
               entry.y = totemMenu.top + 8
@@ -1185,7 +1201,6 @@
       fishEsp.drawings[#fishEsp.drawings + 1] = drawing
       return drawing
   end
-  -- Shared discovery for all names. Never fall back to traversing Workspace.
   fishEsp.setTargets = function(targets)
       fishEsp.targets, fishEsp.liveSeen = {}, {}
       for _, entry in ipairs(targets) do
@@ -1220,7 +1235,6 @@
       local root = character and character:FindFirstChild("HumanoidRootPart")
       if not root then return end
       local origin = root.Position
-      -- Reacquire streamed containers and restart a stale area snapshot after travel.
       if now >= (fishEsp.nextAreaCheck or 0) then
           fishEsp.nextAreaCheck = now + 5
           local active = W:FindFirstChild("active")
@@ -1248,7 +1262,6 @@
           }
       end
       local scan = fishEsp.scan
-      -- At most four instances per tick, independent of clock precision.
       for step = 1, (panelInputCaptured or dragging) and 1 or 4 do
           local item = scan.queue[scan.index]
           if not item then
@@ -1278,7 +1291,6 @@
               end
               local inRange = not part or (part.Position - origin).Magnitude <= 1000
               if not container and not inRange then return end
-              -- A named fish model supplies one identity for its entire mesh tree.
               local matches = scan.names[name]
               if class == "Folder" or not inRange then matches = false end
               if matches == nil then
@@ -1310,7 +1322,6 @@
                       scan.targets[#scan.targets + 1] = {
                           model = owner, part = part, name = ownerName, fixedPart = true,
                       }
-                      -- Newly streamed fish appear immediately, even during an unfinished pass.
                       fishEsp.liveSeen = fishEsp.liveSeen or {}
                       if not fishEsp.liveSeen[owner] and #fishEsp.targets < 64 then
                           fishEsp.liveSeen[owner] = true
@@ -1334,7 +1345,6 @@
           if not ok then
               fishEsp.lastScanError = tostring(err)
           end
-          -- Explicit yield: proxy calls can be much slower than ordinary Lua reads.
           task.wait(0.001)
           if not alive or not fishEsp.enabled or fishEsp.scan ~= scan then return end
       end
@@ -1368,7 +1378,6 @@
           end
       end
       if #targets == 0 then return end
-      -- Bound render work too; large schools must not monopolize the GUI thread.
       for step = 1, math.min(4, #targets) do
           fishEsp.renderIndex = ((fishEsp.renderIndex or 0) % #targets) + 1
           local index = fishEsp.renderIndex
@@ -1390,7 +1399,6 @@
                   if drawing then drawing.Visible = false end
                   return
               end
-              -- Allocate slots in order so the cleanup pool stays dense.
               while #fishEsp.drawings < index do fishEsp.makeDrawing() end
               drawing = fishEsp.drawings[index]
               if now >= (entry.nextText or 0) or drawing.Text == "" then
@@ -1440,7 +1448,6 @@
   fishEsp.toggleEnabled = function()
       fishEsp.editing = false
       fishEsp.scan = nil
-      fishEsp.nextScan = 0
       fishEsp.searchText = nil
       fishEsp.retryAt = 0
       fishEsp.enabled = not fishEsp.enabled
@@ -1450,7 +1457,6 @@
   end
   task.spawn(function()
       while alive do
-          -- Discovery continues over the panel too, using a smaller batch during input.
           if fishEsp.enabled then
               local ok, err = pcall(function()
                   fishEsp.searchAll(tick())
@@ -1551,25 +1557,31 @@
           or insideMain and (x - lastPanelX) / uiScale or 0
       local localY = insideDropdown and (y - dropdownY) / uiScale + 388
           or insideMain and (y - lastPanelY) / uiScale or 0
+      local contentY = localY - (automationMenuOpen and 0 or -74)
       updateCustomGpsTyping()
       if not pcall(fishEsp.updateTyping) then
           fishEsp.editing = false
           pcall(setrobloxinput, true)
       end
+      if insideMain and not dragging and down and not leftWasDown
+          and localY >= 211 and localY <= 238 then
+          automationMenuOpen = not automationMenuOpen
+          automationArrow.Text = automationMenuOpen and "^" or "v"
+          layoutTeleportMenus()
+      end
       if fishEsp.editing and inside and down and not leftWasDown
-          and not (localY >= 320 and localY < 348) then
+          and not (contentY >= 352 and contentY < 379) then
           fishEsp.editing = false
           pcall(setrobloxinput, true)
       end
       if inside and not dragging and down and not leftWasDown
-          and localY >= 320 and localY < 348 then
+          and contentY >= 352 and contentY < 379 then
           fishEsp.editing = true
           fishEsp.keys = {}
           fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
       elseif inside and not dragging and down and not leftWasDown
-          and localY >= 347 and localY <= 370 then
+          and contentY >= 378 and contentY <= 402 then
           fishEsp.toggleEnabled()
-          fishEsp.nextScan = tick() + 0.25
           releasePanelInput()
       end
       if customGpsEditing and inside and down and not leftWasDown
@@ -1578,8 +1590,9 @@
           pcall(setrobloxinput, true)
       end
       if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
           and localX >= 10 and localX <= 147
-          and localY >= 261 and localY <= 283 then
+          and contentY >= 311 and contentY <= 334 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
           castModeText.Text = castMode .. " cast"
           castModeText.Color = castMode == "Instant" and C.instantOff or C.green
@@ -1594,22 +1607,25 @@
           end
       end
       if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
           and localX >= 10 and localX <= 147
-          and localY >= 241 and localY <= 260 then
+          and localY >= 259 and localY <= 280 then
           toggleInstant()
       end
       if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
           and localX >= 10 and localX <= 147
-          and localY >= 220 and localY <= 240 then
+          and localY >= 238 and localY <= 258 then
           toggleMacro()
       end
       if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
           and localX >= 10 and localX <= 147
-          and localY >= 283 and localY <= 305 then
+          and contentY >= 291 and contentY <= 312 then
           toggleHarpoonPull()
       end
       if inside and not dragging and down and not leftWasDown then
-          if localY >= 367 and localY <= 397 then
+          if insideMain and contentY >= 400 and contentY <= 430 then
               npcMenuOpen = not npcMenuOpen
               if npcMenuOpen then
                   totemMenu.open, islandMenu.open = false, false
@@ -1723,9 +1739,6 @@
           sessionCaught = math.max(0, current - catchBase)
       end
   end
-  local function mult(value)
-      return value and string.format("%gx", value) or "?"
-  end
   local function serverClock()
       local minutes = Lighting:GetAttribute("CurrentTime")
       if type(minutes) ~= "number" then return "?", false end
@@ -1823,7 +1836,6 @@
                           include("Local event (name unavailable)")
                       end
                   end
-                  -- Read every event slot, even when its bottom-right icon is hidden.
                   if name:find("event", 1, true) then
                       for _, item in ipairs(entry:GetDescendants()) do
                           if item.ClassName == "TextLabel" then
@@ -1882,8 +1894,6 @@
               includeName(entry[2])
           end
       end
-      -- Some server events remain detectable through a replicated BoolValue even
-      -- when their status icon is not currently rendered on screen.
       for _, root in ipairs({world, RS and RS:FindFirstChild("world")}) do
           if root then
               for _, flag in ipairs(root:GetDescendants()) do
@@ -1961,31 +1971,6 @@
       end)
       return events, descriptions
   end
-  local function advertisedPercent(descriptions, stat)
-      local values, seen = {}, {}
-      for _, description in ipairs(descriptions) do
-          for line in normalized(description):gmatch("[^\n]+") do
-              local patterns = {
-                  stat .. "%s+chance%s*[:=]?%s*([+%-]?%d+%.?%d*)%s*%%",
-                  "([+%-]?%d+%.?%d*)%s*%%%s+" .. stat .. "%s+chance",
-                  stat .. "%s*[:=]%s*([+%-]?%d+%.?%d*)%s*%%",
-              }
-              for _, pattern in ipairs(patterns) do
-                  local raw = line:match(pattern)
-                  local value = raw and tonumber(raw)
-                  if value and math.abs(value) <= 100 then
-                      local sign = raw:sub(1, 1) == "+" and "+" or ""
-                      local text = sign .. string.format("%g%%", value)
-                      if not seen[text] then
-                          seen[text] = true
-                          values[#values + 1] = text
-                      end
-                  end
-              end
-          end
-      end
-      return #values > 0 and table.concat(values, "/") or nil
-  end
   local function advertisedLuck(descriptions, scope)
       local found
       for _, description in ipairs(descriptions) do
@@ -2003,78 +1988,6 @@
           end
       end
       return found, false
-  end
-  local function eventLuck(events)
-      local values, seen = {}, {}
-      for _, description in ipairs(events) do
-          local text = normalized(description)
-          if not text:find("server", 1, true)
-              and not text:find("global", 1, true) then
-              local raw =
-                  text:match("(%d+%.?%d*)%s*x%s+luck")
-                  or text:match("luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
-                  or text:match("luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
-              local value = raw and tonumber(raw)
-              if value and value > 0 then
-                  local textValue = string.format("%gx", value)
-                  if not seen[textValue] then
-                      seen[textValue] = true
-                      values[#values + 1] = textValue
-                  end
-              end
-          end
-      end
-      return #values > 0 and table.concat(values, "/") or nil
-  end
-  local function advertisedEffectMultipliers(descriptions, stat)
-      local values, seen = {}, {}
-      for _, description in ipairs(descriptions) do
-          for line in normalized(description):gmatch("[^\n]+") do
-              local patterns = {
-                  "(%d+%.?%d*)%s*x%s+" .. stat,
-                  "x%s*(%d+%.?%d*)%s+" .. stat,
-                  stat .. "%s+chance%s*[:=]?%s*x%s*(%d+%.?%d*)",
-                  stat .. "%s+chance%s*[:=]?%s*(%d+%.?%d*)%s*x",
-                  stat .. "%s*[:=]%s*x%s*(%d+%.?%d*)",
-                  stat .. "%s*[:=]%s*(%d+%.?%d*)%s*x",
-              }
-              for _, pattern in ipairs(patterns) do
-                  local raw = line:match(pattern)
-                  local value = raw and tonumber(raw)
-                  if value and value > 0 then
-                      local textValue = string.format("%gx", value)
-                      if not seen[textValue] then
-                          seen[textValue] = true
-                          values[#values + 1] = textValue
-                      end
-                  end
-              end
-          end
-      end
-      return values
-  end
-  local function effectText(descriptions, stat, valueName)
-      local multiplier = numberValue(world, valueName)
-      local percent = advertisedPercent(descriptions, stat)
-      local advertised = advertisedEffectMultipliers(descriptions, stat)
-      local parts = {}
-      if multiplier then
-          parts[#parts + 1] = string.format("%gx", multiplier)
-      end
-      local extras = {}
-      local baseText = multiplier and string.format("%gx", multiplier)
-      for _, value in ipairs(advertised) do
-          if value ~= baseText then
-              extras[#extras + 1] = value
-          end
-      end
-      if #extras > 0 then
-          parts[#parts + 1] = "E:" .. table.concat(extras, "/")
-      end
-      if percent then
-          parts[#parts + 1] = percent
-      end
-      return #parts > 0 and table.concat(parts, " ") or "?"
   end
   local function environmentText(events, now)
       if #events == 0 then
@@ -2197,7 +2110,6 @@
       if not globalLuck and not globalConflict then
           globalLuck = numberValue(world, "luck_Luck")
       end
-      local eventMultiplier = eventLuck(cachedEvents)
       environmentText(cachedEvents, now)
   end
   local function disableInstant()
