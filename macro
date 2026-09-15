@@ -109,7 +109,7 @@
       ["rainbow"] = "8x Luck | +5% Shiny | +5% Sparkling",
       ["starfall"] = "+10% Progress Speed",
       ["tornado"] = "+20% Lure Speed",
-      ["eclipse"] = "Solar Fragment access",
+      ["eclipse"] = "+4 Disturbance",
       ["frost moon"] = "9x Luck",
   }
   weatherApi = nil
@@ -117,6 +117,8 @@
   localizedEventLibrary = nil
   eventIconColors = {}
   eventIconColorsLoaded = false
+  eventStatusCacheText = nil
+  eventStatusCacheName = nil
   localizedEventNames = {
       AbsoluteDarkness = "Absolute Darkness",
       DepthsAbsoluteDarkness = "Absolute Darkness",
@@ -397,7 +399,7 @@
   local harpoonToggleLast = 0
   local npcToggleText = label("Teleports", 12, 474, 10)
   npcToggleText.Color = C.cyan
-  local npcArrow = label("v", 236, 472, 14)
+  local npcArrow = label("v", PANEL_W - 24, 472, 14)
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
@@ -405,26 +407,40 @@
       d.Visible = false
       return d
   end
-  npcLabel("CUSTOM GPS", 14, 397, 11, C.cyan)
-  local npcSubArrow = npcLabel("v", 251, 450, 16, C.cyan)
-  npcLabel("NPCs", 14, 452, 11, C.green)
-  npcLabel("BUFFERS", 14, 480, 11, C.yellow)
-  npcLabel("Merlin", 26, 504, 12)
-  npcLabel("Astronomer Vega", 26, 532, 12)
-  npcLabel("SHOPS", 14, 564, 11, C.pink)
-  npcLabel("Daily Shopkeeper", 26, 588, 12)
-  npcLabel("Rare Goods Dealer", 26, 616, 12)
-  npcLabel("Elder Kaito", 26, 644, 12)
-  npcLabel("ETC", 14, 672, 11, Color3.fromRGB(255, 175, 90))
-  npcLabel("Shells", 26, 700, 12)
-  local npcStatus = npcLabel("Click a name to teleport", 14, 731, 10, C.muted)
+  local function npcRule(y, color)
+      local d = add("Square", 14, y, 0.55)
+      d.Size = Vector2.new(PANEL_W - 28, 1)
+      d.Color = color or C.line
+      d.Filled = true
+      d.Visible = false
+      npcMenuDrawings[d] = y
+      return d
+  end
+  -- Keep the dropdown in clear sections: GPS, NPCs, Totems, and Islands.
+  npcLabel("CUSTOM GPS", 14, 393, 10, C.cyan)
+  npcRule(441, C.cyan)
+  local npcSubArrow = npcLabel("v", PANEL_W - 24, 458, 14, C.green)
+  npcLabel("NPCs", 14, 460, 11, C.green)
+  npcRule(480, C.yellow)
+  npcLabel("BUFFERS", 14, 488, 10, C.yellow)
+  npcLabel("Merlin", 26, 512, 12)
+  npcLabel("Astronomer Vega", 26, 540, 12)
+  npcRule(568, C.pink)
+  npcLabel("SHOPS", 14, 576, 10, C.pink)
+  npcLabel("Daily Shopkeeper", 26, 600, 12)
+  npcLabel("Rare Goods Dealer", 26, 628, 12)
+  npcLabel("Elder Kaito", 26, 656, 12)
+  npcRule(684, Color3.fromRGB(255, 175, 90))
+  npcLabel("ETC", 14, 692, 10, Color3.fromRGB(255, 175, 90))
+  npcLabel("Shells", 26, 716, 12)
+  local npcStatus = npcLabel("Click a name to teleport", 14, 744, 10, C.muted)
   local npcRows = {
-      {name = "Merlin", aliases = {"merlin"}, y = 498, pos = {-943, 224, -988}},
-      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 526, preferHead = true},
-      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 582, pos = {229, 139, 42}},
-      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 610, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
-      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 638, pos = {3000, 1635, 901}, exactPosition = true, skipNpc = true},
-      {name = "Shells", aliases = {}, y = 694, pos = {-3822, -1280, 500}, exactPosition = true, skipNpc = true},
+      {name = "Merlin", aliases = {"merlin"}, y = 506, pos = {-943, 224, -988}},
+      {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 534, preferHead = true, pos = {-1957, 227, -465}, exactPosition = true},
+      {name = "Daily Shopkeeper", aliases = {"dailyshopkeeper", "dailyshop"}, y = 594, pos = {229, 139, 42}},
+      {name = "Rare Goods Dealer", aliases = {"raregoodsdealer"}, y = 622, pos = {-2976.1, -1023.4, 6044.2}, exactPosition = true},
+      {name = "Elder Kaito", aliases = {"elderkaito", "kaito"}, y = 650, pos = {3000, 1635, 901}, exactPosition = true, skipNpc = true},
+      {name = "Shells", aliases = {}, y = 710, pos = {-3822, -1280, 500}, exactPosition = true, skipNpc = true},
   }
   totemMenu.rows = {
       {name = "Avalanche", pos = {19708, 467, 6058}},
@@ -439,9 +455,9 @@
       {name = "Windset", pos = {2851, 178, 2703}},
       {name = "Zeus Storm", pos = {-4326, -627, 2687}},
   }
-  totemMenu.title = label("Totems", 14, 396, 12)
+  totemMenu.title = label("Totems", 14, 396, 11)
   totemMenu.title.Color = C.yellow
-  totemMenu.arrow = label("v", 251, 394, 16)
+  totemMenu.arrow = label("v", PANEL_W - 24, 394, 14)
   local function totemLabel(text, x, offset, size, color)
       local d = label(text, x, totemMenu.top + offset, size)
       d.Color = color or C.white
@@ -480,9 +496,9 @@
       {name = "The Depths", pos = {980, -710, 1320}},
       {name = "Tidefall", pos = {3223, 130, 850}},
   }
-  islandMenu.title = label("Islands", 14, 428, 12)
+  islandMenu.title = label("Islands", 14, 428, 11)
   islandMenu.title.Color = C.pink
-  islandMenu.arrow = label("v", 251, 426, 16)
+  islandMenu.arrow = label("v", PANEL_W - 24, 426, 14)
   local function islandLabel(text, x, offset, size, color)
       local d = label(text, x, islandMenu.top + offset, size)
       d.Color = color or C.white
@@ -1705,16 +1721,17 @@
           or "Teleport write failed"
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
   end
-  customGpsFallbackBox = add("Square", 10, 392)
+  customGpsFallbackBox = add("Square", 10, 406)
   customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
   customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
   customGpsFallbackBox.Filled = true
   customGpsFallbackBox.Visible = false
-  npcMenuDrawings[customGpsFallbackBox] = 392
-  customGpsFallbackText = label("(type GPS cords here)", 16, 397, 10)
+  npcMenuDrawings[customGpsFallbackBox] = 406
+  customGpsFallbackText = label("(type GPS cords here)", 16, 411, 10)
   customGpsFallbackText.Color = C.muted
   customGpsFallbackText.Visible = false
-  npcMenuDrawings[customGpsFallbackText] = 392
+  npcMenuDrawings[customGpsFallbackText] = 406
+  npcLabel("Teleport to GPS", 14, 432, 10, C.blue)
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
       local dropdownX = teleportWindow.x
@@ -1800,7 +1817,7 @@
           releasePanelInput()
       end
       if customGpsEditing and inside and down and not leftWasDown
-          and not (localY >= 392 and localY < 420) then
+          and not (localY >= 406 and localY < 430) then
           customGpsEditing = false
           pcall(setrobloxinput, true)
       end
@@ -1845,15 +1862,15 @@
               totemMenu.open, islandMenu.open = false, false
               if not npcMenuOpen then customGpsEditing = false end
               layoutTeleportMenus()
-          elseif insideDropdown and localY >= 392 and localY < 420 then
+          elseif insideDropdown and localY >= 406 and localY < 430 then
               customGpsEditing = true
               customGpsKeys = {}
               pcall(setrobloxinput, false)
               updateCustomGpsDisplay()
-          elseif insideDropdown and localY >= 452 and localY < 480 then
+          elseif insideDropdown and localY >= 456 and localY < 484 then
               npcSubOpen = not npcSubOpen
               layoutTeleportMenus()
-          elseif insideDropdown and localY >= 420 and localY < 447 then
+          elseif insideDropdown and localY >= 430 and localY < 456 then
               teleportCustomGps()
           elseif insideDropdown and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
@@ -2023,6 +2040,8 @@
           if not value then return end
           describe(value)
           local title = value:match("[^\n]+") or value
+          local titleLower = title:lower()
+          if titleLower:find("name unavailable", 1, true) then return end
           local key = title:lower():gsub("%s+", " ")
           for line in value:gmatch("[^\n]+") do
               local lower = line:lower()
@@ -2111,20 +2130,27 @@
                       if item.ClassName == "TextLabel"
                           and item.Name:lower():find("tooltip", 1, true) then
                           local current = item:GetAttribute("CurrentText")
-                          local text = cleanText(current) or cleanText(item.Text)
-                          if text then
-                              include(text)
+                           local text = cleanText(current) or cleanText(item.Text)
+                           if text then
+                               include(text)
+                               if name == "event1" then
+                                  local cachedTitle = text:match("[^\n]+") or ""
+                                  if not cachedTitle:lower():find("name unavailable", 1, true) then
+                                      eventStatusCacheText = text
+                                      eventStatusCacheName = cachedTitle
+                                  end
+                               end
                               readable = true
                           end
                       end
                   end
                   if not readable and entry.ClassName == "Frame" then
                       if name:match("^event%d+$") then
-                          include("Server event (name unavailable)")
+                          -- Direct replicated state or the cached event text supplies the name.
                       elseif name:match("^adminevent%d+$") then
-                          include("Admin event (name unavailable)")
+                          -- Admin event names are handled by their own replicated value.
                       elseif name:match("^localizedevent%d+$") then
-                          include("Local event (name unavailable)")
+                          -- Local event names are handled by Workspace attributes.
                       end
                   end
                   if name:find("event", 1, true) then
@@ -2154,8 +2180,27 @@
           local slot = world and world:FindFirstChild(name)
           if slot then
                if slot.ClassName == "StringValue" then
-                   includeKnown(slot.Value, slot:GetAttribute("EndTime"))
-              end
+                   local slotName = cleanText(slot.Value)
+                   if name == "event" then
+                       if slotName then
+                           if slotName:lower() == "none" then
+                               eventStatusCacheText = nil
+                               eventStatusCacheName = nil
+                           else
+                               if eventStatusCacheName
+                                   and eventStatusCacheName:lower() ~= slotName:lower() then
+                                   eventStatusCacheText = nil
+                                   eventStatusCacheName = nil
+                               end
+                               includeKnown(slotName, slot:GetAttribute("EndTime"))
+                           end
+                       elseif eventStatusCacheText then
+                           include(eventStatusCacheText)
+                       end
+                   else
+                       includeKnown(slotName, slot:GetAttribute("EndTime"))
+                   end
+               end
               for _, group in ipairs(slot:GetDescendants()) do
                   if group.ClassName == "StringValue" then
                       includeName(group.Value)
@@ -2333,6 +2378,27 @@
       end
       return found, false
   end
+  local function wrapEventTitle(value)
+      local limit = 38
+      if #value <= limit then return value, nil end
+      local split = value:find(" | ", 1, true)
+      if split then
+          local first = value:sub(1, split - 1)
+          local second = value:sub(split + 3)
+          if #second > limit then
+              second = second:sub(1, limit - 3) .. "..."
+          end
+          return first, second
+      end
+      local cut = value:sub(1, limit):match("^.*%s")
+      cut = cut and #cut or limit
+      local first = value:sub(1, cut):gsub("%s+$", "")
+      local second = value:sub(cut + 1):gsub("^%s+", "")
+      if #second > limit then
+          second = second:sub(1, limit - 3) .. "..."
+      end
+      return first, second ~= "" and second or nil
+  end
   local function environmentText(events, now)
       if #events == 0 then
           eventHeading.Text = "WEATHER / EVENTS"
@@ -2365,7 +2431,9 @@
       for _, row in ipairs(weatherLines) do
           for _, line in ipairs(row) do line.Text = "" end
       end
+      local rowSlot = 1
       for i = first, last do
+          if rowSlot > #weatherLines then break end
           local title = events[i]:match("^[^\n]+") or events[i]
            local key = title:lower():gsub("%s+", " ")
            local deadline = eventDeadlines[key]
@@ -2381,12 +2449,13 @@
            end
            local modifier = eventFallbackModifiers[key] or eventModifiers[key]
            if modifier then title = title:gsub("%s+$", "") .. "  |  " .. modifier end
-          local row = weatherLines[i - first + 1]
-          for j = 1, 4 do
-              row[j].Text = title
-               row[j].Color = C.bg
-          end
-          row[5].Text = title
+           local firstTitle, secondTitle = wrapEventTitle(title)
+           local row = weatherLines[rowSlot]
+           for j = 1, 4 do
+               row[j].Text = firstTitle
+                row[j].Color = C.bg
+           end
+           row[5].Text = firstTitle
           row[5].Color = C.white
           local name = title:lower()
           if name:find("aurora", 1, true) then
@@ -2417,7 +2486,7 @@
            elseif name:find("mutation surge", 1, true) then
                row[5].Color = Color3.fromRGB(55, 255, 25)
            elseif name:find("tropical sun", 1, true) then
-               row[5].Color = Color3.fromRGB(255, 195, 60)
+               row[5].Color = Color3.fromRGB(255, 235, 145)
            elseif name:find("eclipse", 1, true) then
                row[5].Color = Color3.fromRGB(255, 145, 35)
            elseif name:find("starfall", 1, true) then
@@ -2440,6 +2509,50 @@
                row[5].Color = Color3.fromRGB(255, 235, 75)
            elseif name:find("night of fireflies", 1, true) then
                row[5].Color = Color3.fromRGB(205, 170, 255)
+           end
+           if secondTitle and rowSlot < #weatherLines then
+               local secondRow = weatherLines[rowSlot + 1]
+               local secondColor = C.white
+               if name:find("aurora", 1, true) then
+                   secondColor = Color3.fromRGB(150, 255, 170)
+               elseif name:find("mutation surge", 1, true) then
+                   secondColor = Color3.fromRGB(55, 255, 25)
+               elseif name:find("tropical sun", 1, true) then
+                   secondColor = Color3.fromRGB(255, 235, 145)
+               elseif name:find("eclipse", 1, true) then
+                   secondColor = Color3.fromRGB(255, 145, 35)
+               elseif name:find("starfall", 1, true) then
+                   secondColor = Color3.fromRGB(180, 105, 255)
+               elseif name:find("rainbow", 1, true) then
+                   secondColor = Color3.fromRGB(255, 110, 195)
+               elseif name:find("frost moon", 1, true) then
+                   secondColor = Color3.fromRGB(150, 220, 255)
+               elseif name:find("sovereign surge", 1, true) then
+                   secondColor = Color3.fromRGB(105, 215, 255)
+               elseif name:find("sovereign storm", 1, true) then
+                   secondColor = Color3.fromRGB(125, 115, 230)
+               elseif name:find("sovereign reckoning", 1, true) then
+                   secondColor = Color3.fromRGB(170, 45, 255)
+               elseif name:find("shiny surge", 1, true)
+                   or name:find("night of luminous", 1, true)
+                   or name:find("night of the luminous", 1, true)
+                   or name:find("day of luminous", 1, true)
+                   or name:find("day of the luminous", 1, true) then
+                   secondColor = Color3.fromRGB(255, 235, 75)
+               elseif name:find("night of fireflies", 1, true) then
+                   secondColor = Color3.fromRGB(205, 170, 255)
+               elseif eventIconColors[key] then
+                   secondColor = eventIconColors[key]
+               end
+               for j = 1, 4 do
+                   secondRow[j].Text = secondTitle
+                   secondRow[j].Color = C.bg
+               end
+               secondRow[5].Text = secondTitle
+               secondRow[5].Color = secondColor
+               rowSlot = rowSlot + 2
+           else
+               rowSlot = rowSlot + 1
            end
        end
       return ""
