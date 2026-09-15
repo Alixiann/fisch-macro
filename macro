@@ -78,8 +78,8 @@
       instantOn = Color3.fromRGB(0, 255, 0),
       instantOff = Color3.fromRGB(255, 0, 0),
   }
-  local PANEL_W, PANEL_H = 278, 420
-  local uiScale = 1.2
+  local PANEL_W, PANEL_H = 260, 410
+  local uiScale = 1.05
   local MIN_UI_SCALE = 0.80
   local MAX_UI_SCALE = 1.30
   local UI_SCALE_STEP = 0.10
@@ -113,6 +113,13 @@
   local customGpsText = ""
   local customGpsEditing = false
   local customGpsKeys = {}
+  previous.fishEsp = {
+      box = nil, input = nil, toggle = nil, status = nil,
+      text = "", editing = false, enabled = false, keys = {}, drawings = {},
+      nextScan = 0, nextDraw = 0, resolvedName = nil, targets = {},
+      nameCache = {}, cacheReady = false, cacheAt = 0,
+  }
+  fishEsp = previous.fishEsp
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
       d.Visible = true
@@ -139,6 +146,18 @@
   menuBackdrop.Filled = true
   menuBackdrop.Visible = false
   local menuBackdropLayout = layout[#layout]
+  teleportWindow = {x = nil, y = nil, dragging = false, offsetX = 0, offsetY = 0}
+  teleportWindow.bg = Drawing.new("Square")
+  teleportWindow.bg.Color = C.bg
+  teleportWindow.bg.Filled = true
+  teleportWindow.bg.Visible = false
+  teleportWindow.bg.ZIndex = 0
+  teleportWindow.border = Drawing.new("Square")
+  teleportWindow.border.Color = C.line
+  teleportWindow.border.Filled = false
+  teleportWindow.border.Thickness = 2
+  teleportWindow.border.Visible = false
+  teleportWindow.border.ZIndex = 0
   local accent = add("Square", 0, 0)
   accent.Size = Vector2.new(PANEL_W, 2)
   accent.Color = C.red
@@ -204,7 +223,7 @@
       totemMenu.startupIntro.line,
       totemMenu.startupIntro.byline,
   }
-  local titleText = label("Fisch Macro", 14, 13, 20)
+  local titleText = label("Fisch Macro", 12, 10, 18)
   titleText.Color = C.pink
   local resizeMinus = label("-", PANEL_W - 48, 12, 17)
   resizeMinus.Color = Color3.fromRGB(255, 70, 70)
@@ -212,61 +231,73 @@
   resizePlus.Color = Color3.fromRGB(70, 255, 110)
   local watermark = label("made by: 1a", PANEL_W - 112, 16, 9)
   watermark.Color = C.muted
-  local statusText = label("OFF", 14, 42, 12)
-  local fishText = label("Caught    --", 14, 69, 14)
+  local statusText = label("OFF", 12, 34, 11)
+  local fishText = label("Caught    --", 12, 55, 12)
   fishText.Color = Color3.fromRGB(255, 210, 110)
-  local timerText = label("Runtime   00:00:00", 14, 91, 14)
+  local timerText = label("Runtime   00:00:00", 12, 74, 12)
   timerText.Color = Color3.fromRGB(105, 225, 255)
-  local clockText = label("Server    --", 14, 113, 14)
+  local clockText = label("Server    --", 12, 93, 12)
   clockText.Color = Color3.fromRGB(190, 145, 255)
   local clockDayBlend = 0.5
   local clockOutlines = {
-      label("", 13, 113, 14), label("", 15, 113, 14),
-      label("", 14, 112, 14), label("", 14, 114, 14),
+      label("", 11, 93, 12), label("", 13, 93, 12),
+      label("", 12, 92, 12), label("", 12, 94, 12),
   }
   for _, outline in ipairs(clockOutlines) do outline.Color = C.white end
-  local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 13, 139, 12)
-  local eventHeadingOutlineRight = label("WEATHER / EVENTS", 15, 139, 12)
-  local eventHeadingOutlineUp = label("WEATHER / EVENTS", 14, 138, 12)
-  local eventHeadingOutlineDown = label("WEATHER / EVENTS", 14, 140, 12)
+  local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 11, 118, 10)
+  local eventHeadingOutlineRight = label("WEATHER / EVENTS", 13, 118, 10)
+  local eventHeadingOutlineUp = label("WEATHER / EVENTS", 12, 117, 10)
+  local eventHeadingOutlineDown = label("WEATHER / EVENTS", 12, 119, 10)
   for _, outline in ipairs({
       eventHeadingOutlineLeft, eventHeadingOutlineRight,
       eventHeadingOutlineUp, eventHeadingOutlineDown,
   }) do
       outline.Color = C.white
   end
-  local eventHeading = label("WEATHER / EVENTS", 14, 139, 12)
+  local eventHeading = label("WEATHER / EVENTS", 12, 118, 10)
   eventHeading.Color = Color3.fromRGB(25, 60, 130) -- dark blue
   eventHeading.Outline = false
   local weatherLines = {
-      {label("", 13, 156, 12), label("", 15, 156, 12), label("", 14, 155, 12), label("", 14, 157, 12), label("", 14, 156, 12)},
-      {label("", 13, 172, 12), label("", 15, 172, 12), label("", 14, 171, 12), label("", 14, 173, 12), label("", 14, 172, 12)},
-      {label("", 13, 188, 12), label("", 15, 188, 12), label("", 14, 187, 12), label("", 14, 189, 12), label("", 14, 188, 12)},
-      {label("", 13, 204, 12), label("", 15, 204, 12), label("", 14, 203, 12), label("", 14, 205, 12), label("", 14, 204, 12)},
-      {label("", 13, 220, 12), label("", 15, 220, 12), label("", 14, 219, 12), label("", 14, 221, 12), label("", 14, 220, 12)},
-      {label("", 13, 236, 12), label("", 15, 236, 12), label("", 14, 235, 12), label("", 14, 237, 12), label("", 14, 236, 12)},
+      {label("", 11, 133, 10), label("", 13, 133, 10), label("", 12, 132, 10), label("", 12, 134, 10), label("", 12, 133, 10)},
+      {label("", 11, 146, 10), label("", 13, 146, 10), label("", 12, 145, 10), label("", 12, 147, 10), label("", 12, 146, 10)},
+      {label("", 11, 159, 10), label("", 13, 159, 10), label("", 12, 158, 10), label("", 12, 160, 10), label("", 12, 159, 10)},
+      {label("", 11, 172, 10), label("", 13, 172, 10), label("", 12, 171, 10), label("", 12, 173, 10), label("", 12, 172, 10)},
+      {label("", 11, 185, 10), label("", 13, 185, 10), label("", 12, 184, 10), label("", 12, 186, 10), label("", 12, 185, 10)},
+      {label("", 11, 198, 10), label("", 13, 198, 10), label("", 12, 197, 10), label("", 12, 199, 10), label("", 12, 198, 10)},
   }
-  local divider = add("Square", 14, 258)
+  local divider = add("Square", 12, 214)
   divider.Size = Vector2.new(PANEL_W - 28, 1)
   divider.Color = C.line
   divider.Filled = true
-  local macroText = label("Macro OFF", 14, 268, 11)
+  local macroText = label("Macro OFF", 12, 224, 10)
   macroText.Color = C.instantOff
-  label("Keybind: R-Ctrl", 151, 268, 9)
-  local instantText = label("Instant catch OFF", 14, 292, 11)
+  label("Keybind: R-Ctrl", 140, 224, 8)
+  local instantText = label("Instant catch OFF", 12, 245, 10)
   instantText.Color = C.instantOff
-  label("Keybind: R-Alt", 151, 292, 9)
-  local castModeText = label("Instant cast", 14, 316, 11)
+  label("Keybind: R-Alt", 140, 245, 8)
+  local castModeText = label("Instant cast", 12, 266, 10)
   castModeText.Color = C.instantOff
   npcMenuDrawings[label("(catch a fish before", 14, 397, 9)] = -397
   npcMenuDrawings[label("enabling instant catch)", 14, 409, 9)] = -409
-  local harpoonPullText = label("Harpoon Pull OFF", 14, 341, 11)
+  local harpoonPullText = label("Harpoon Pull OFF", 12, 287, 10)
   harpoonPullText.Color = C.instantOff
-  label("Keybind: [", 151, 341, 9)
+  label("Keybind: [", 140, 287, 8)
+  fishEsp.heading = label("Fish ESP", 12, 307, 10)
+  fishEsp.heading.Color = C.cyan
+  fishEsp.box = add("Square", 12, 323)
+  fishEsp.box.Size = Vector2.new(PANEL_W - 24, 22)
+  fishEsp.box.Color = Color3.fromRGB(35, 42, 56)
+  fishEsp.box.Filled = true
+  fishEsp.input = label("fish names, separated by commas", 18, 328, 9)
+  fishEsp.input.Color = C.muted
+  fishEsp.toggle = label("Fish ESP OFF", 12, 350, 10)
+  fishEsp.toggle.Color = C.instantOff
+  fishEsp.status = label("", 120, 350, 8)
+  fishEsp.status.Color = C.muted
   local harpoonToggleLast = 0
-  local npcToggleText = label("Teleports", 14, 365, 12)
+  local npcToggleText = label("Teleports", 12, 374, 10)
   npcToggleText.Color = C.cyan
-  local npcArrow = label("v", 251, 363, 16)
+  local npcArrow = label("v", 236, 372, 14)
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
@@ -296,17 +327,17 @@
       {name = "Shells", aliases = {}, y = 694, pos = {-3822, -1280, 500}, exactPosition = true, skipNpc = true},
   }
   totemMenu.rows = {
-      {name = "Clearcast", pos = {701, 250, 305}},
-      {name = "Tempest", pos = {36, 135, 1946}},
-      {name = "Windset", pos = {2851, 178, 2703}},
-      {name = "Smokescreen", pos = {2791, 139, -629}},
-      {name = "Meteor (Roslit)", match = "Meteor", pos = {-1944, 276, 231}},
-      {name = "Eclipse", pos = {5967, 274, 839}},
       {name = "Avalanche", pos = {19708, 467, 6058}},
       {name = "Blizzard", pos = {20147, 743, 5805}},
       {name = "Blue Moon", pos = {2715, 140, 2480}},
-      {name = "Zeus Storm", pos = {-4326, -627, 2687}},
+      {name = "Clearcast", pos = {701, 250, 305}},
       {name = "Dripstone Collapse", pos = {3158, -1105, 788}},
+      {name = "Eclipse", pos = {5967, 274, 839}},
+      {name = "Meteor (Roslit)", match = "Meteor", pos = {-1944, 276, 231}},
+      {name = "Smokescreen", pos = {2791, 139, -629}},
+      {name = "Tempest", pos = {36, 135, 1946}},
+      {name = "Windset", pos = {2851, 178, 2703}},
+      {name = "Zeus Storm", pos = {-4326, -627, 2687}},
   }
   totemMenu.title = label("Totems", 14, 396, 12)
   totemMenu.title.Color = C.yellow
@@ -326,27 +357,28 @@
   totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
   totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
   islandMenu.rows = {
+      {name = "Ancient Isle", pos = {6050, 195, 330}},
+      {name = "Castaway Cliffs", pos = {690, 135, -1693}},
+      {name = "Cursed Isle", pos = {1860, 127, 1210}},
+      {name = "Desolate Deep", pos = {-790, 110, -3100}},
+      {name = "Dry Lands", match = {"drylands", "dryland"}, pos = {-23525, 2630, -5750}, offset = {0, -8, 18}},
+      {name = "Everturn Forest", pos = {2365, 130, -2330}},
+      {name = "Forsaken Shores", pos = {-2425, 135, 1555}},
+      {name = "Grand Reef", pos = {-3530, 130, 550}},
+      {name = "Lost Jungle", pos = {-2680, 154, -2078}},
       {name = "Moosewood", pos = {350, 135, 250}},
+      {name = "Mushgrove Swamp", pos = {2425, 127, -670}},
+      {name = "Northern Expedition", pos = {19977, 917, 5375}},
       {name = "Roslit Bay", pos = {-1450, 135, 750}},
+      {name = "Scoria Reach", pos = {-4781, 138, -1378}},
+      {name = "Skycrest", match = {"skycrest", "skycrestisland"}, pos = {-25990, 3094, -5036}},
+      {name = "Snowcap Island", pos = {2600, 150, 2400}},
+      {name = "Statue of Sovereignty", pos = {20, 160, -1040}},
       {name = "Sunstone Island", pos = {-935, 130, -1105}},
       {name = "Terrapin Island", pos = {-190, 130, 1925}},
-      {name = "Forsaken Shores", pos = {-2425, 135, 1555}},
-      {name = "Snowcap Island", pos = {2600, 150, 2400}},
-      {name = "Mushgrove Swamp", pos = {2425, 127, -670}},
-      {name = "Desolate Deep", pos = {-790, 110, -3100}},
-      {name = "Ancient Isle", pos = {6050, 195, 330}},
-      {name = "Northern Expedition", pos = {19977, 917, 5375}},
-      {name = "Tidefall", pos = {3223, 130, 850}},
-      {name = "Skycrest", match = {"skycrest", "skycrestisland"}, pos = {-25990, 3094, -5036}},
-      {name = "Cursed Isle", pos = {1860, 127, 1210}},
-      {name = "Grand Reef", pos = {-3530, 130, 550}},
-      {name = "Dry Lands", match = {"drylands", "dryland"}, pos = {-23525, 2630, -5750}, offset = {0, -8, 18}},
-      {name = "Lost Jungle", pos = {-2680, 154, -2078}},
-      {name = "Scoria Reach", pos = {-4781, 138, -1378}},
-      {name = "Statue of Sovereignty", pos = {20, 160, -1040}},
       {name = "The Deep", pos = {228, 130, -11945}},
-      {name = "Everturn Forest", pos = {2365, 130, -2330}},
-      {name = "Castaway Cliffs", pos = {690, 135, -1693}},
+      {name = "The Depths", pos = {980, -710, 1320}},
+      {name = "Tidefall", pos = {3223, 130, 850}},
   }
   islandMenu.title = label("Islands", 14, 428, 12)
   islandMenu.title.Color = C.pink
@@ -560,6 +592,16 @@
           y = math.clamp(y, 0, math.max(0, viewport.Y - drawH))
       end
       lastPanelX, lastPanelY = x, y
+      local dropdownY = teleportWindow.y or (y + PANEL_H * uiScale + 8)
+      local dropdownX = teleportWindow.x or x
+      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      teleportWindow.x, teleportWindow.y = dropdownX, dropdownY
+      teleportWindow.bg.Position = Vector2.new(dropdownX, dropdownY)
+      teleportWindow.bg.Size = Vector2.new(PANEL_W * uiScale, dropdownHeight)
+      teleportWindow.border.Position = Vector2.new(dropdownX, dropdownY)
+      teleportWindow.border.Size = Vector2.new(PANEL_W * uiScale, dropdownHeight)
+      local windowVisible = shown and npcMenuOpen and npcMenuAnim > 0.001
+      teleportWindow.bg.Visible, teleportWindow.border.Visible = windowVisible, windowVisible
       if customGpsFallbackBox then
           local visible = shown and npcMenuOpen
           customGpsFallbackBox.Visible = visible
@@ -567,7 +609,14 @@
           customGpsFallbackButton.Visible = visible
       end
       for _, entry in ipairs(layout) do
-          entry.d.Position = Vector2.new(x + entry.x * uiScale, y + entry.y * uiScale)
+          local isMenuEntry = entry.d == menuBackdrop
+              or npcMenuDrawings[entry.d] or totemMenu.drawings[entry.d]
+              or islandMenu.drawings[entry.d] or entry.d == totemMenu.title
+              or entry.d == totemMenu.arrow or entry.d == islandMenu.title
+              or entry.d == islandMenu.arrow
+          local originX = isMenuEntry and dropdownX or x
+          local originY = isMenuEntry and (dropdownY - 388 * uiScale) or y
+          entry.d.Position = Vector2.new(originX + entry.x * uiScale, originY + entry.y * uiScale)
           local ok, size = pcall(function() return entry.d.Size end)
           if ok and size then
               if entry.baseSize == nil then
@@ -590,6 +639,24 @@
       local value = ismouse2pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
       local x, y = cursor.X, cursor.Y
+      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      local inDropdown = focused and shown and npcMenuOpen and teleportWindow.x and teleportWindow.y
+          and x >= teleportWindow.x and x <= teleportWindow.x + PANEL_W * uiScale
+          and y >= teleportWindow.y and y <= teleportWindow.y + dropdownHeight
+      if inDropdown and down then
+          if not rightWasDown then
+              teleportWindow.dragging = true
+              teleportWindow.offsetX, teleportWindow.offsetY = x - teleportWindow.x, y - teleportWindow.y
+              pcall(setrobloxinput, false)
+          end
+          if teleportWindow.dragging then
+              teleportWindow.x, teleportWindow.y = x - teleportWindow.offsetX, y - teleportWindow.offsetY
+              positionPanel()
+          end
+          rightWasDown = down
+          return
+      end
+      if not down then teleportWindow.dragging = false end
       if not focused or not shown or type(x) ~= "number" or type(y) ~= "number" then
           dragging = false
       elseif down then
@@ -622,6 +689,12 @@
       local edgeColor = Color3.fromRGB(edgeLevel, 35, edgeLevel)
       border.Color = edgeColor
       accent.Color = edgeColor
+      teleportWindow.border.Color = edgeColor
+      local teleportAlpha = shown and npcMenuOpen and npcMenuAnim or 0
+      teleportWindow.bg.Transparency = 0.64 * fadeAmount * teleportAlpha
+      teleportWindow.border.Transparency = fadeAmount * teleportAlpha
+      teleportWindow.bg.Visible = teleportAlpha > 0.001
+      teleportWindow.border.Visible = teleportAlpha > 0.001
       local watermarkPulse = (math.sin(borderPhase) + 1) / 2
       watermark.Color = Color3.new(
           C.pink.R + (C.white.R - C.pink.R) * watermarkPulse,
@@ -866,16 +939,16 @@
       npcSubArrow.Text = npcSubOpen and "^" or "v"
       totemMenu.arrow.Text = totemMenu.open and "^" or "v"
       islandMenu.arrow.Text = islandMenu.open and "^" or "v"
-      PANEL_H = islandMenu.top + 32 + 221 * islandMenu.anim
+      PANEL_H = 410
       for _, entry in ipairs(layout) do
           if entry.d == bg or entry.d == border then
               entry.baseSize = Vector2.new(PANEL_W, PANEL_H)
           end
       end
-      local backdropHeight = math.max(0, PANEL_H - 388)
+      local backdropHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388)
       menuBackdropLayout.y = 388
       menuBackdropLayout.baseSize = Vector2.new(PANEL_W, backdropHeight)
-      menuBackdrop.Visible = math.max(npcMenuAnim, totemMenu.anim) > 0.001
+      menuBackdrop.Visible = false
       for _, entry in ipairs(layout) do
           if entry.d == totemMenu.title then
               entry.y = totemMenu.top + 8
@@ -1078,6 +1151,328 @@
       customGpsKeys[0x0D] = enter
       updateCustomGpsDisplay()
   end
+  fishEsp.normalize = function(value)
+      return tostring(value or ""):lower():gsub("[^%w]", "")
+  end
+  fishEsp.distance = function(a, b)
+      local prev = {}
+      for j = 0, #b do prev[j] = j end
+      for i = 1, #a do
+          local cur = {[0] = i}
+          for j = 1, #b do
+              cur[j] = math.min(cur[j - 1] + 1, prev[j] + 1,
+                  prev[j - 1] + (a:sub(i, i) == b:sub(j, j) and 0 or 1))
+          end
+          prev = cur
+      end
+      return prev[#b]
+  end
+  fishEsp.clearDrawings = function()
+      for _, drawing in ipairs(fishEsp.drawings) do pcall(function() drawing:Remove() end) end
+      fishEsp.drawings = {}
+      fishEsp.targets = {}
+  end
+  fishEsp.makeDrawing = function()
+      local drawing = Drawing.new("Text")
+      drawing.Size = 12
+      drawing.Font = 7
+      drawing.Center = true
+      drawing.Outline = true
+      drawing.Color = Color3.fromRGB(180, 235, 255)
+      drawing.Transparency = 1
+      drawing.ZIndex = 500
+      drawing.Visible = false
+      fishEsp.drawings[#fishEsp.drawings + 1] = drawing
+      return drawing
+  end
+  -- Shared discovery for all names. Never fall back to traversing Workspace.
+  fishEsp.setTargets = function(targets)
+      fishEsp.targets, fishEsp.liveSeen = {}, {}
+      for _, entry in ipairs(targets) do
+          fishEsp.targets[#fishEsp.targets + 1] = entry
+          fishEsp.liveSeen[entry.model] = true
+      end
+      fishEsp.renderIndex = 0
+      for i = #targets + 1, #fishEsp.drawings do
+          fishEsp.drawings[i].Visible = false
+      end
+  end
+  fishEsp.searchAll = function(now)
+      if fishEsp.searchText ~= fishEsp.text then
+          fishEsp.searchText = fishEsp.text
+          fishEsp.queries, fishEsp.scan = {}, nil
+          fishEsp.retryAt = 0
+          local seen = {}
+          for value in fishEsp.text:gmatch("[^,;]+") do
+              local query = fishEsp.normalize(value):sub(1, 64)
+              if query ~= "" and not seen[query] and #fishEsp.queries < 8 then
+                  seen[query] = true
+                  fishEsp.queries[#fishEsp.queries + 1] = query
+              end
+          end
+          fishEsp.setTargets({})
+      end
+      if not fishEsp.queries or #fishEsp.queries == 0 then
+          fishEsp.status.Text = "Enter fish names"
+          return
+      end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then return end
+      local origin = root.Position
+      -- Reacquire streamed containers and restart a stale area snapshot after travel.
+      if now >= (fishEsp.nextAreaCheck or 0) then
+          fishEsp.nextAreaCheck = now + 5
+          local active = W:FindFirstChild("active")
+          local roaming = active and active:FindFirstChild("roamingFish")
+          local moved = fishEsp.areaOrigin and (origin - fishEsp.areaOrigin).Magnitude >= 250
+          if roaming ~= fishEsp.areaFolder or moved then
+              fishEsp.scan = nil
+              fishEsp.areaFolder, fishEsp.areaOrigin = roaming, origin
+          elseif not fishEsp.areaOrigin then
+              fishEsp.areaOrigin = origin
+          end
+      end
+      if not fishEsp.scan then
+          if now < (fishEsp.retryAt or 0) then return end
+          local active = W:FindFirstChild("active")
+          local roaming = active and active:FindFirstChild("roamingFish")
+          if not roaming then
+              fishEsp.status.Text = "Waiting for live fish"
+              fishEsp.retryAt = now + 5
+              return
+          end
+          fishEsp.scan = {
+              queue = {{object = roaming}}, index = 1, targets = {},
+              seen = {}, names = {}, root = roaming,
+          }
+      end
+      local scan = fishEsp.scan
+      -- At most four instances per tick, independent of clock precision.
+      for step = 1, (panelInputCaptured or dragging) and 1 or 4 do
+          local item = scan.queue[scan.index]
+          if not item then
+              fishEsp.setTargets(scan.targets)
+              fishEsp.status.Text = #scan.targets .. " fish | refresh 5s"
+              fishEsp.scan = nil
+              fishEsp.retryAt = now + 5
+              return
+          end
+          scan.queue[scan.index] = false
+          scan.index = scan.index + 1
+          local object = item.object
+          local ok, err = pcall(function()
+              if not object.Parent then return end
+              local class = object.ClassName
+              local isPart = class == "Part" or class == "MeshPart" or class == "UnionOperation"
+              local container = class == "Model" or class == "Folder"
+              if not container and not isPart then return end
+              local name = object.Name
+              local owner, ownerName = item.owner, item.ownerName
+              local part
+              if isPart then
+                  part = object
+              elseif class == "Model" then
+                  part = object.PrimaryPart or object:FindFirstChild("Hitbox")
+                      or object:FindFirstChild("Center")
+              end
+              local inRange = not part or (part.Position - origin).Magnitude <= 1000
+              if not container and not inRange then return end
+              -- A named fish model supplies one identity for its entire mesh tree.
+              local matches = scan.names[name]
+              if class == "Folder" or not inRange then matches = false end
+              if matches == nil then
+                  matches = false
+                  local normalized = fishEsp.normalize(name)
+                  for _, query in ipairs(fishEsp.queries) do
+                      if normalized == query or (#query >= 3 and normalized:find(query, 1, true)) then
+                          matches = true
+                          break
+                      end
+                      if #query >= 3 and #normalized <= 64 then
+                          local limit = math.min(2, math.max(1, math.floor(#query * 0.25)))
+                          if math.abs(#normalized - #query) <= limit
+                              and fishEsp.distance(query, normalized) <= limit then
+                              matches = true
+                              break
+                          end
+                      end
+                  end
+                  scan.names[name] = matches
+              end
+              if matches and not owner and (class == "Model" or isPart) then
+                  owner, ownerName = object, name
+              end
+              if part and owner and not scan.seen[owner] and #scan.targets < 64 then
+                  local position = part.Position
+                  if (position - origin).Magnitude <= 1000 then
+                      scan.seen[owner] = true
+                      scan.targets[#scan.targets + 1] = {
+                          model = owner, part = part, name = ownerName, fixedPart = true,
+                      }
+                      -- Newly streamed fish appear immediately, even during an unfinished pass.
+                      fishEsp.liveSeen = fishEsp.liveSeen or {}
+                      if not fishEsp.liveSeen[owner] and #fishEsp.targets < 64 then
+                          fishEsp.liveSeen[owner] = true
+                          fishEsp.targets[#fishEsp.targets + 1] = scan.targets[#scan.targets]
+                      end
+                  end
+              end
+              if container then
+                  local children = object:GetChildren()
+                  for i, child in ipairs(children) do
+                      scan.queue[#scan.queue + 1] = {
+                          object = child, owner = owner, ownerName = ownerName,
+                      }
+                      if i % 16 == 0 then
+                          task.wait(0.01)
+                          if not alive or not fishEsp.enabled or fishEsp.scan ~= scan then return end
+                      end
+                  end
+              end
+          end)
+          if not ok then
+              fishEsp.lastScanError = tostring(err)
+          end
+          -- Explicit yield: proxy calls can be much slower than ordinary Lua reads.
+          task.wait(0.001)
+          if not alive or not fishEsp.enabled or fishEsp.scan ~= scan then return end
+      end
+  end
+  fishEsp.update = function(now)
+      if not fishEsp.enabled then return end
+      local targets = fishEsp.targets
+      if #targets == 0 then return end
+      local character = player.Character
+      local root = character and character:FindFirstChild("HumanoidRootPart")
+      if not root then
+          for _, drawing in ipairs(fishEsp.drawings) do drawing.Visible = false end
+          return
+      end
+      local origin = root.Position
+      local activeTargets = {}
+      for _, entry in ipairs(targets) do
+          local keep = false
+          pcall(function()
+              keep = entry.model.Parent and entry.part.Parent
+                  and (entry.part.Position - origin).Magnitude <= 1000
+          end)
+          if keep then activeTargets[#activeTargets + 1] = entry end
+      end
+      if #activeTargets ~= #targets then
+          fishEsp.targets = activeTargets
+          targets = activeTargets
+          fishEsp.renderIndex = 0
+          for i = #activeTargets + 1, #fishEsp.drawings do
+              fishEsp.drawings[i].Visible = false
+          end
+      end
+      if #targets == 0 then return end
+      -- Bound render work too; large schools must not monopolize the GUI thread.
+      for step = 1, math.min(4, #targets) do
+          fishEsp.renderIndex = ((fishEsp.renderIndex or 0) % #targets) + 1
+          local index = fishEsp.renderIndex
+          local entry = targets[index]
+          local drawing = fishEsp.drawings[index]
+          local ok = pcall(function()
+              if not entry.part.Parent or not entry.model.Parent then
+                  if drawing then drawing.Visible = false end
+                  return
+              end
+              local position = entry.part.Position
+              local distance = (position - origin).Magnitude
+              if distance > 1000 then
+                  if drawing then drawing.Visible = false end
+                  return
+              end
+              local point, visible = WorldToScreen(position)
+              if not point or not visible then
+                  if drawing then drawing.Visible = false end
+                  return
+              end
+              -- Allocate slots in order so the cleanup pool stays dense.
+              while #fishEsp.drawings < index do fishEsp.makeDrawing() end
+              drawing = fishEsp.drawings[index]
+              if now >= (entry.nextText or 0) or drawing.Text == "" then
+                  drawing.Text = entry.name:sub(1, 40) .. "  |  " .. math.floor(distance + 0.5) .. " studs"
+                  entry.nextText = now + 0.25
+              end
+              drawing.Position = Vector2.new(point.X, point.Y - 10)
+              drawing.Visible = true
+          end)
+          if not ok and drawing then drawing.Visible = false end
+      end
+  end
+  fishEsp.updateTyping = function()
+      if not fishEsp.editing then return end
+      local ctrl = iskeypressed(0x11) == true
+      local paste = iskeypressed(0x56) == true
+      if ctrl and paste and not fishEsp.keys[0x100] then
+          local getter = type(getclipboard) == "function" and getclipboard
+              or type(get_clipboard) == "function" and get_clipboard
+          if getter then local ok, value = pcall(getter); if ok then fishEsp.text = tostring(value or "") end end
+      end
+      fishEsp.keys[0x100] = ctrl and paste
+      for code = 0x41, 0x5A do
+          local down = iskeypressed(code) == true
+          if down and not ctrl and not fishEsp.keys[code] then fishEsp.text = fishEsp.text .. string.char(code + 32) end
+          fishEsp.keys[code] = down
+      end
+      local space = iskeypressed(0x20) == true
+      if space and not fishEsp.keys[0x20] then fishEsp.text = fishEsp.text .. " " end
+      fishEsp.keys[0x20] = space
+      local comma = iskeypressed(0xBC) == true
+      if comma and not fishEsp.keys[0xBC] then fishEsp.text = fishEsp.text .. ", " end
+      fishEsp.keys[0xBC] = comma
+      fishEsp.text = fishEsp.text:sub(1, 512)
+      local backspace = iskeypressed(0x08) == true
+      if backspace and not fishEsp.keys[0x08] then fishEsp.text = fishEsp.text:sub(1, math.max(0, #fishEsp.text - 1)) end
+      fishEsp.keys[0x08] = backspace
+      local enter = iskeypressed(0x0D) == true
+      if enter and not fishEsp.keys[0x0D] then
+          fishEsp.editing = false
+          pcall(setrobloxinput, true)
+      end
+      fishEsp.keys[0x0D] = enter
+      fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
+      fishEsp.input.Color = fishEsp.text ~= "" and C.white or C.muted
+  end
+  fishEsp.toggleEnabled = function()
+      fishEsp.editing = false
+      fishEsp.scan = nil
+      fishEsp.nextScan = 0
+      fishEsp.searchText = nil
+      fishEsp.retryAt = 0
+      fishEsp.enabled = not fishEsp.enabled
+      fishEsp.toggle.Text = fishEsp.enabled and "Fish ESP ON" or "Fish ESP OFF"
+      fishEsp.toggle.Color = fishEsp.enabled and C.instantOn or C.instantOff
+      if not fishEsp.enabled then fishEsp.clearDrawings() end
+  end
+  task.spawn(function()
+      while alive do
+          -- Discovery continues over the panel too, using a smaller batch during input.
+          if fishEsp.enabled then
+              local ok, err = pcall(function()
+                  fishEsp.searchAll(tick())
+              end)
+              if not ok then
+                  fishEsp.scan = nil
+                  fishEsp.retryAt = tick() + 5
+                  fishEsp.status.Text = "Retrying scan..."
+                  warn("Fish ESP scan: " .. tostring(err))
+              end
+          end
+          task.wait(fishEsp.enabled and 0.02 or 0.05)
+      end
+  end)
+  task.spawn(function()
+      while alive do
+          if fishEsp.enabled then
+              pcall(fishEsp.update, tick())
+          end
+          task.wait(1 / 60)
+      end
+  end)
   local function teleportCustomGps()
       enabled, equipPending = false, false
       mouse(false)
@@ -1118,16 +1513,24 @@
   customGpsFallbackText.Color = C.muted
   customGpsFallbackText.Visible = false
   npcMenuDrawings[customGpsFallbackText] = 397
-  customGpsFallbackButton = label("GPS Teleport", 88, 428, 12)
-  customGpsFallbackButton.Color = Color3.fromRGB(90, 255, 130)
+  customGpsFallbackButton = label("", 88, 428, 12)
+  customGpsFallbackButton.Color = C.bg
   customGpsFallbackButton.Visible = false
   npcMenuDrawings[customGpsFallbackButton] = 425
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
-      local inside = focused and shown and lastPanelX and lastPanelY
+      local dropdownX = teleportWindow.x
+      local dropdownY = teleportWindow.y
+      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      local insideMain = focused and shown and lastPanelX and lastPanelY
           and type(x) == "number" and type(y) == "number"
           and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
           and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
+      local insideDropdown = focused and shown and npcMenuOpen and dropdownY
+          and type(x) == "number" and type(y) == "number"
+          and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
+          and y >= dropdownY and y <= dropdownY + dropdownHeight
+      local inside = insideMain or insideDropdown
       local capture = focused and shown and (inside or dragging)
       if capture and not panelInputCaptured then
           mouse(false)
@@ -1144,9 +1547,31 @@
       end
       local value = ismouse1pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
-      local localX = inside and (x - lastPanelX) / uiScale or 0
-      local localY = inside and (y - lastPanelY) / uiScale or 0
+      local localX = insideDropdown and (x - lastPanelX) / uiScale
+          or insideMain and (x - lastPanelX) / uiScale or 0
+      local localY = insideDropdown and (y - dropdownY) / uiScale + 388
+          or insideMain and (y - lastPanelY) / uiScale or 0
       updateCustomGpsTyping()
+      if not pcall(fishEsp.updateTyping) then
+          fishEsp.editing = false
+          pcall(setrobloxinput, true)
+      end
+      if fishEsp.editing and inside and down and not leftWasDown
+          and not (localY >= 320 and localY < 348) then
+          fishEsp.editing = false
+          pcall(setrobloxinput, true)
+      end
+      if inside and not dragging and down and not leftWasDown
+          and localY >= 320 and localY < 348 then
+          fishEsp.editing = true
+          fishEsp.keys = {}
+          fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
+      elseif inside and not dragging and down and not leftWasDown
+          and localY >= 347 and localY <= 370 then
+          fishEsp.toggleEnabled()
+          fishEsp.nextScan = tick() + 0.25
+          releasePanelInput()
+      end
       if customGpsEditing and inside and down and not leftWasDown
           and not (localY >= 397 and localY < 425) then
           customGpsEditing = false
@@ -1154,7 +1579,7 @@
       end
       if inside and not dragging and down and not leftWasDown
           and localX >= 10 and localX <= 147
-          and localY >= 311 and localY <= 337 then
+          and localY >= 261 and localY <= 283 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
           castModeText.Text = castMode .. " cast"
           castModeText.Color = castMode == "Instant" and C.instantOff or C.green
@@ -1170,21 +1595,21 @@
       end
       if inside and not dragging and down and not leftWasDown
           and localX >= 10 and localX <= 147
-          and localY >= 287 and localY <= 313 then
+          and localY >= 241 and localY <= 260 then
           toggleInstant()
       end
       if inside and not dragging and down and not leftWasDown
           and localX >= 10 and localX <= 147
-          and localY >= 263 and localY <= 285 then
+          and localY >= 220 and localY <= 240 then
           toggleMacro()
       end
       if inside and not dragging and down and not leftWasDown
           and localX >= 10 and localX <= 147
-          and localY >= 337 and localY <= 356 then
+          and localY >= 283 and localY <= 305 then
           toggleHarpoonPull()
       end
       if inside and not dragging and down and not leftWasDown then
-          if localY >= 357 and localY <= 387 then
+          if localY >= 367 and localY <= 397 then
               npcMenuOpen = not npcMenuOpen
               if npcMenuOpen then
                   totemMenu.open, islandMenu.open = false, false
@@ -1398,6 +1823,20 @@
                           include("Local event (name unavailable)")
                       end
                   end
+                  -- Read every event slot, even when its bottom-right icon is hidden.
+                  if name:find("event", 1, true) then
+                      for _, item in ipairs(entry:GetDescendants()) do
+                          if item.ClassName == "TextLabel" then
+                              local text = cleanText(item:GetAttribute("CurrentText"))
+                                  or cleanText(item.Text)
+                              local lower = text and text:lower() or ""
+                              if text and lower ~= "weather status"
+                                  and not lower:find("failed to fetch", 1, true) then
+                                  include(text)
+                              end
+                          end
+                      end
+                  end
               end
           end
       end
@@ -1434,10 +1873,31 @@
       for _, entry in ipairs({
           {"meteor_active", "Meteor"},
           {"blizzard_active", "Blizzard"},
+          {"absolute_darkness_active", "Absolute Darkness"},
+          {"absoluteDarkness_active", "Absolute Darkness"},
+          {"absoluteDarknessActive", "Absolute Darkness"},
       }) do
           local flag = world and world:FindFirstChild(entry[1])
           if flag and flag.ClassName == "BoolValue" and flag.Value == true then
               includeName(entry[2])
+          end
+      end
+      -- Some server events remain detectable through a replicated BoolValue even
+      -- when their status icon is not currently rendered on screen.
+      for _, root in ipairs({world, RS and RS:FindFirstChild("world")}) do
+          if root then
+              for _, flag in ipairs(root:GetDescendants()) do
+                  if flag.ClassName == "BoolValue" and flag.Value == true then
+                      local n = flag.Name:lower():gsub("[^%w]", "")
+                      if n:find("meteor", 1, true) and n:find("active", 1, true) then
+                          includeName("Meteor")
+                      elseif n:find("absolute", 1, true)
+                          and n:find("dark", 1, true)
+                          and n:find("active", 1, true) then
+                          includeName("Absolute Darkness")
+                      end
+                  end
+              end
           end
       end
       local boostsGui = gui and gui:FindFirstChild("CurrentServerBoosts")
@@ -1453,7 +1913,15 @@
                   and amount.ClassName == "TextLabel"
                   and cleanText(amount.Text)
               if titleValue and amountValue then
-                  describe(titleValue .. " " .. amountValue)
+                  local boostText = titleValue .. " " .. amountValue
+                  describe(boostText)
+                  local boostName = titleValue:lower()
+                  if boostName:find("meteor", 1, true)
+                      or boostName:find("absolute", 1, true)
+                      or boostName:find("darkness", 1, true)
+                      or boostName:find("event", 1, true) then
+                      include(boostText)
+                  end
               end
               for _, item in ipairs(entry:GetDescendants()) do
                   if item.ClassName == "TextLabel" then
@@ -1641,7 +2109,13 @@
           for _, line in ipairs(row) do line.Text = "" end
       end
       for i = first, last do
-          local title = events[i]:match("[^\n]+") or events[i]
+          local title = events[i]:match("^[^\n]+") or events[i]
+          local timer = events[i]:match("(%d%d?:%d%d)")
+              or events[i]:match("(%d+)%s*[sS]ec")
+              or events[i]:match("(%d+)%s*[mM]in")
+          if timer and not title:find(timer, 1, true) then
+              title = title .. "  [" .. timer .. "]"
+          end
           local row = weatherLines[i - first + 1]
           for j = 1, 4 do
               row[j].Text = title
@@ -1862,6 +2336,9 @@
       for _, d in ipairs(totemMenu.startupIntro.drawings) do
           d:Remove()
       end
+      teleportWindow.bg:Remove()
+      teleportWindow.border:Remove()
+      fishEsp.clearDrawings()
       _G.StopFischMacro = nil
   end
   _G.StopFischMacro = stop
