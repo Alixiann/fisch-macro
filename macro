@@ -62,6 +62,8 @@
   local borderPhase = 0
   local lastDisplay = ""
   local cachedEvents, cachedDescriptions = {}, {}
+  eventDeadlines = {}
+  eventTimerReadings = {}
   local nextEnvironment = 0
   local C = {
       bg = Color3.fromRGB(55, 65, 83),
@@ -78,7 +80,7 @@
       instantOff = Color3.fromRGB(255, 0, 0),
   }
   local PANEL_W, PANEL_H = 260, 430
-  local uiScale = 1.05
+  local uiScale = 1.25
   local MIN_UI_SCALE = 0.80
   local MAX_UI_SCALE = 1.30
   local UI_SCALE_STEP = 0.10
@@ -167,15 +169,15 @@
       local d = add("Text", x, y)
       d.Text = value
       d.Size = size
-      d.Font = 7 -- Matcha Pixel font.
-      d.Outline = false
-      d.Color = Color3.fromRGB(255, 255, 255)
+      d.Font = 4 -- Minecraft pixel font.
+      d.Outline = true
+      d.Color = C.white
       return d
   end
   totemMenu.startupIntro.title = Drawing.new("Text")
   totemMenu.startupIntro.title.Text = "Fisch Matcha Macro"
   totemMenu.startupIntro.title.Size = 26
-  totemMenu.startupIntro.title.Font = 7
+  totemMenu.startupIntro.title.Font = 4
   totemMenu.startupIntro.title.Center = true
   totemMenu.startupIntro.title.Outline = true
   totemMenu.startupIntro.title.Color = C.pink
@@ -189,7 +191,7 @@
   totemMenu.startupIntro.byline = Drawing.new("Text")
   totemMenu.startupIntro.byline.Text = "made by: 1a"
   totemMenu.startupIntro.byline.Size = 12
-  totemMenu.startupIntro.byline.Font = 7
+  totemMenu.startupIntro.byline.Font = 4
   totemMenu.startupIntro.byline.Center = true
   totemMenu.startupIntro.byline.Outline = true
   totemMenu.startupIntro.byline.Color = C.muted
@@ -234,12 +236,8 @@
   timerText.Color = Color3.fromRGB(105, 225, 255)
   local clockText = label("Server    --", 12, 93, 12)
   clockText.Color = Color3.fromRGB(190, 145, 255)
+  clockText.Outline = false
   local clockDayBlend = 0.5
-  local clockOutlines = {
-      label("", 11, 93, 12), label("", 13, 93, 12),
-      label("", 12, 92, 12), label("", 12, 94, 12),
-  }
-  for _, outline in ipairs(clockOutlines) do outline.Color = C.white end
   local eventHeadingOutlineLeft = label("WEATHER / EVENTS", 11, 118, 10)
   local eventHeadingOutlineRight = label("WEATHER / EVENTS", 13, 118, 10)
   local eventHeadingOutlineUp = label("WEATHER / EVENTS", 12, 117, 10)
@@ -248,11 +246,11 @@
       eventHeadingOutlineLeft, eventHeadingOutlineRight,
       eventHeadingOutlineUp, eventHeadingOutlineDown,
   }) do
-      outline.Color = C.white
+      outline.Color = C.bg
   end
   local eventHeading = label("WEATHER / EVENTS", 12, 118, 10)
-  eventHeading.Color = Color3.fromRGB(25, 60, 130) -- dark blue
-  eventHeading.Outline = false
+  eventHeading.Color = C.white
+  eventHeading.Outline = true
   local weatherLines = {
       {label("", 11, 133, 10), label("", 13, 133, 10), label("", 12, 132, 10), label("", 12, 134, 10), label("", 12, 133, 10)},
       {label("", 11, 146, 10), label("", 13, 146, 10), label("", 12, 145, 10), label("", 12, 147, 10), label("", 12, 146, 10)},
@@ -753,15 +751,18 @@
       local y = panelY or (viewport
           and math.max(8, (viewport.Y - drawH) / 2) or 260
       )
+      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      local dropdownX = teleportWindow.x or x
+      local dropdownY = teleportWindow.y or (y + PANEL_H * uiScale + 8)
       if viewport then
           x = math.clamp(x, 0, math.max(0, viewport.X - drawW))
           y = math.clamp(y, 0, math.max(0, viewport.Y - drawH))
+          dropdownX = math.clamp(dropdownX, 0, math.max(0, viewport.X - drawW))
+          dropdownY = math.clamp(dropdownY, 0, math.max(0, viewport.Y - dropdownHeight))
       end
-      lastPanelX, lastPanelY = x, y
-      local dropdownY = teleportWindow.y or (y + PANEL_H * uiScale + 8)
-      local dropdownX = teleportWindow.x or x
-      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      panelX, panelY = x, y
       teleportWindow.x, teleportWindow.y = dropdownX, dropdownY
+      lastPanelX, lastPanelY = x, y
       teleportWindow.bg.Position = Vector2.new(dropdownX, dropdownY)
       teleportWindow.bg.Size = Vector2.new(PANEL_W * uiScale, dropdownHeight)
       teleportWindow.border.Position = Vector2.new(dropdownX, dropdownY)
@@ -1320,7 +1321,7 @@
   fishEsp.makeDrawing = function()
       local drawing = Drawing.new("Text")
       drawing.Size = 12
-      drawing.Font = 7
+      drawing.Font = 4
       drawing.Center = true
       drawing.Outline = true
       drawing.Color = Color3.fromRGB(180, 235, 255)
@@ -1630,16 +1631,16 @@
           or "Teleport write failed"
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
   end
-  customGpsFallbackBox = add("Square", 14, 397)
+  customGpsFallbackBox = add("Square", 10, 392)
   customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
   customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
   customGpsFallbackBox.Filled = true
   customGpsFallbackBox.Visible = false
-  npcMenuDrawings[customGpsFallbackBox] = 397
-  customGpsFallbackText = label("(type GPS cords here)", 20, 402, 10)
+  npcMenuDrawings[customGpsFallbackBox] = 392
+  customGpsFallbackText = label("(type GPS cords here)", 16, 397, 10)
   customGpsFallbackText.Color = C.muted
   customGpsFallbackText.Visible = false
-  npcMenuDrawings[customGpsFallbackText] = 397
+  npcMenuDrawings[customGpsFallbackText] = 392
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
       local dropdownX = teleportWindow.x
@@ -1725,7 +1726,7 @@
           releasePanelInput()
       end
       if customGpsEditing and inside and down and not leftWasDown
-          and not (localY >= 397 and localY < 425) then
+          and not (localY >= 392 and localY < 420) then
           customGpsEditing = false
           pcall(setrobloxinput, true)
       end
@@ -1770,7 +1771,7 @@
               totemMenu.open, islandMenu.open = false, false
               if not npcMenuOpen then customGpsEditing = false end
               layoutTeleportMenus()
-          elseif insideDropdown and localY >= 397 and localY < 425 then
+          elseif insideDropdown and localY >= 392 and localY < 420 then
               customGpsEditing = true
               customGpsKeys = {}
               pcall(setrobloxinput, false)
@@ -1778,7 +1779,7 @@
           elseif insideDropdown and localY >= 452 and localY < 480 then
               npcSubOpen = not npcSubOpen
               layoutTeleportMenus()
-          elseif insideDropdown and localY >= 425 and localY < 452 then
+          elseif insideDropdown and localY >= 420 and localY < 447 then
               teleportCustomGps()
           elseif insideDropdown and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
@@ -1916,7 +1917,7 @@
   local function normalized(value)
       return (cleanText(value) or ""):lower()
   end
-  local function readEnvironment()
+  local function readEnvironment(now)
       gui = player and player:FindFirstChild("PlayerGui") or gui
       world = RS and RS:FindFirstChild("world") or nil
       local events, descriptions = {}, {}
@@ -1930,13 +1931,22 @@
               descriptions[#descriptions + 1] = value
           end
       end
-      local function include(value)
-          value = cleanText(value)
-          if not value then return end
-          describe(value)
-          local title = value:match("[^\n]+") or value
-          local key = title:lower():gsub("%s+", " ")
-          local index = seenEvents[key]
+       local function include(value)
+           value = cleanText(value)
+           if not value then return end
+           describe(value)
+           local title = value:match("[^\n]+") or value
+           local key = title:lower():gsub("%s+", " ")
+           local minutes, seconds = value:match("(%d+):(%d%d)%s*[rR]emaining")
+           if minutes and seconds then
+               local remaining = tonumber(minutes) * 60 + tonumber(seconds)
+               local deadline = eventDeadlines[key]
+               if not deadline or remaining ~= eventTimerReadings[key] then
+                   eventDeadlines[key] = now + remaining
+               end
+               eventTimerReadings[key] = remaining
+           end
+           local index = seenEvents[key]
           if not index then
               events[#events + 1] = value
               seenEvents[key] = #events
@@ -2133,10 +2143,10 @@
           eventHeadingOutlineRight.Text = eventHeading.Text
           eventHeadingOutlineUp.Text = eventHeading.Text
           eventHeadingOutlineDown.Text = eventHeading.Text
-          eventHeadingOutlineLeft.Color = C.white
-          eventHeadingOutlineRight.Color = C.white
-          eventHeadingOutlineUp.Color = C.white
-          eventHeadingOutlineDown.Color = C.white
+           eventHeadingOutlineLeft.Color = C.bg
+           eventHeadingOutlineRight.Color = C.bg
+           eventHeadingOutlineUp.Color = C.bg
+           eventHeadingOutlineDown.Color = C.bg
           for _, row in ipairs(weatherLines) do
               for _, line in ipairs(row) do line.Text = "" end
           end
@@ -2160,16 +2170,22 @@
       end
       for i = first, last do
           local title = events[i]:match("^[^\n]+") or events[i]
-          local timer = events[i]:match("(%d%d?:%d%d)")
-              or events[i]:match("(%d+)%s*[sS]ec")
-              or events[i]:match("(%d+)%s*[mM]in")
+           local key = title:lower():gsub("%s+", " ")
+           local deadline = eventDeadlines[key]
+           local timer = deadline and string.format(
+               "%02d:%02d remaining",
+               math.floor(math.max(0, deadline - now) / 60),
+               math.floor(math.max(0, deadline - now) % 60)
+           ) or events[i]:match("(%d%d?:%d%d)")
+               or events[i]:match("(%d+)%s*[sS]ec")
+               or events[i]:match("(%d+)%s*[mM]in")
           if timer and not title:find(timer, 1, true) then
               title = title .. "  [" .. timer .. "]"
           end
           local row = weatherLines[i - first + 1]
           for j = 1, 4 do
               row[j].Text = title
-              row[j].Color = C.white
+               row[j].Color = C.bg
           end
           row[5].Text = title
           row[5].Color = C.white
@@ -2178,7 +2194,7 @@
               row[5].Color = Color3.fromRGB(115, 255, 145)
           elseif name:find("sovereign storm", 1, true) then
               row[5].Color = Color3.fromRGB(75, 25, 125)
-              for j = 1, 4 do row[j].Color = Color3.fromRGB(220, 80, 255) end
+               for j = 1, 4 do row[j].Color = C.bg end
           elseif name:find("sovereign surge", 1, true) then
               row[5].Color = Color3.fromRGB(70, 190, 255)
           elseif name:find("night of luminous", 1, true)
@@ -2189,7 +2205,7 @@
           elseif name:find("eclipse", 1, true)
               or name:find("blood moon", 1, true) then
               row[5].Color = Color3.fromRGB(125, 20, 25)
-              for j = 1, 4 do row[j].Color = Color3.fromRGB(255, 55, 55) end
+               for j = 1, 4 do row[j].Color = C.bg end
           elseif name:find("meteor", 1, true) then
               row[5].Color = Color3.fromRGB(255, 95, 95)
           elseif name:find("night", 1, true) then
@@ -2216,25 +2232,15 @@
       local blend = 1 - math.exp(-0.5 * 5)
       clockDayBlend = clockDayBlend
           + ((isDaytime and 1 or 0) - clockDayBlend) * blend
-      local nightText = Color3.fromRGB(35, 75, 170)
+      local nightText = Color3.fromRGB(210, 230, 255)
       local dayText = Color3.fromRGB(255, 235, 80)
-      local nightOutline = Color3.fromRGB(55, 130, 255)
-      local dayOutline = Color3.fromRGB(150, 105, 0)
       clockText.Color = Color3.new(
           nightText.R + (dayText.R - nightText.R) * clockDayBlend,
           nightText.G + (dayText.G - nightText.G) * clockDayBlend,
           nightText.B + (dayText.B - nightText.B) * clockDayBlend
       )
-      for _, outline in ipairs(clockOutlines) do
-          outline.Text = clockText.Text
-          outline.Color = Color3.new(
-              nightOutline.R + (dayOutline.R - nightOutline.R) * clockDayBlend,
-              nightOutline.G + (dayOutline.G - nightOutline.G) * clockDayBlend,
-              nightOutline.B + (dayOutline.B - nightOutline.B) * clockDayBlend
-          )
-      end
       if now >= nextEnvironment then
-          cachedEvents, cachedDescriptions = readEnvironment()
+           cachedEvents, cachedDescriptions = readEnvironment(now)
           nextEnvironment = now + ENVIRONMENT_INTERVAL
       end
       local serverLuck, serverConflict =
