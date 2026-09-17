@@ -45,9 +45,13 @@
   local navigationWanted = false
   local pendingKey, keyReleaseAt
   local nextCast, releaseAt = 0, nil
+  PERFECT_CAST_UPDATE = 0.1
+  perfectCastNextUpdate = 0
+  perfectCastPercent, perfectCastInGreen = nil, false
   local castMeter, castFill, castGreen
   local idleSince
   local recoveryStage, recoveryAt = 0, 0
+  local lastReequipAt, nextEquipAttemptAt = 0, 0
   local previous, drawings, layout = {}, {}, {}
   local inputConnections = {}
   local lastFish, lastBar, lastTime
@@ -118,6 +122,21 @@
   eventIconColorsLoaded = false
   eventStatusCacheText = nil
   eventStatusCacheName = nil
+  local stellarwaveState = {
+      root = nil,
+      lastRootScan = 0,
+      lastButtonScan = 0,
+      buttons = {},
+      sequence = {},
+      sequenceKey = "",
+      sequenceLocked = false,
+      completedSequenceKey = "",
+      nextIndex = 1,
+      nextClickAt = 0,
+      lastActiveKey = nil,
+      wheel = nil,
+      clickGap = 0.12,
+  }
   localizedEventNames = {
       AbsoluteDarkness = "Absolute Darkness",
       DepthsAbsoluteDarkness = "Absolute Darkness",
@@ -180,8 +199,10 @@
   local UI_SCALE_STEP = 0.10
   local MACRO_KEY = 0xA3
   local INSTANT_KEY = 0xA5
+  local AUTO_TOTEM_KEY = 0xDE -- apostrophe / VK_OEM_7
   local npcMenuOpen = false
   local npcMenuAnim = 0
+  teleportsTabTop = 0
   local npcSubOpen = false
   local dropdownAnimLast = tick()
   local npcMenuDrawings = {}
@@ -195,7 +216,7 @@
       slots = {},
       buttonCache = {shakeAt = 0, shake = nil, harpoonAt = 0, harpoon = nil}
   }
-  totemMenu.startupIntro = {active = true, started = tick(), amount = 0, drawings = {}}
+  totemMenu.startupIntro = {active = false, started = tick(), amount = 0, drawings = {}}
   local islandMenu = {
       open = false,
       anim = 0,
@@ -205,6 +226,27 @@
       drawings = {},
       slots = {}
   }
+  autoTotem = {
+      open = false,
+      anim = 0,
+      enabled = false,
+      luckEnabled = false,
+      busy = false,
+      pending = false,
+      startupCheckPending = false,
+      startupConfirmed = false,
+      attemptStartedAt = nil,
+      failsafeSeconds = 60,
+      restartRequired = false,
+      generation = 0,
+      nextScan = 0,
+      scanInterval = 60,
+      targetKind = nil,
+      targetName = nil,
+      tabTop = 0,
+      top = 0,
+      drawings = {},
+  }
   local customGpsFallbackBox, customGpsFallbackText
   local customGpsText = ""
   local customGpsEditing = false
@@ -212,7 +254,7 @@
   fishEsp = {
       box = nil, input = nil, toggle = nil, status = nil,
       text = "", editing = false, enabled = false, keys = {}, drawings = {},
-      targets = {},
+      targets = {}, queries = {}, queryReady = false, rareRequested = false,
   }
   rodSpeed = {
       box = nil, input = nil, toggle = nil, status = nil,
@@ -399,7 +441,7 @@
   fishEsp.box.Size = Vector2.new(PANEL_W - 24, 22)
   fishEsp.box.Color = Color3.fromRGB(35, 42, 56)
   fishEsp.box.Filled = true
-  fishEsp.input = label("fish names, separated by commas", 18, 427, 9)
+  fishEsp.input = label("fish names; hunt names get full-map ESP", 18, 427, 9)
   fishEsp.input.Color = C.muted
   fishEsp.toggle = label("Fish ESP OFF", 12, 449, 10)
   fishEsp.toggle.Color = C.instantOff
@@ -409,6 +451,15 @@
   local npcToggleText = label("Teleports", 12, 474, 10)
   npcToggleText.Color = C.cyan
   local npcArrow = label("v", PANEL_W - 24, 472, 14)
+  autoTotem.title = label("Auto Totem", 14, 0, 11)
+  autoTotem.title.Color = C.cyan
+  autoTotem.arrow = label("v", PANEL_W - 24, 0, 14)
+  local npcSubArrow, npcStatus
+  local teleportHeadersBuilt = false
+  local npcMenuBuilt = false
+  local totemMenuBuilt = false
+  local islandMenuBuilt = false
+  autoTotemBuilt = false
   local function npcLabel(text, x, y, size, color)
       local d = label(text, x, y, size)
       d.Color = color or C.white
@@ -426,23 +477,6 @@
       return d
   end
   -- Keep the dropdown in clear sections: GPS, NPCs, Totems, and Islands.
-  npcLabel("CUSTOM GPS", 14, 393, 10, C.cyan)
-  npcRule(441, C.cyan)
-  local npcSubArrow = npcLabel("v", PANEL_W - 24, 458, 14, C.green)
-  npcLabel("NPCs", 14, 460, 11, C.green)
-  npcRule(480, C.yellow)
-  npcLabel("BUFFERS", 14, 488, 10, C.yellow)
-  npcLabel("Merlin", 26, 512, 12)
-  npcLabel("Astronomer Vega", 26, 540, 12)
-  npcRule(568, C.pink)
-  npcLabel("SHOPS", 14, 576, 10, C.pink)
-  npcLabel("Daily Shopkeeper", 26, 600, 12)
-  npcLabel("Rare Goods Dealer", 26, 628, 12)
-  npcLabel("Elder Kaito", 26, 656, 12)
-  npcRule(684, Color3.fromRGB(255, 175, 90))
-  npcLabel("ETC", 14, 692, 10, Color3.fromRGB(255, 175, 90))
-  npcLabel("Shells", 26, 716, 12)
-  local npcStatus = npcLabel("Click a name to teleport", 14, 744, 10, C.muted)
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 506, pos = {-943, 224, -988}},
       {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 534, preferHead = true, pos = {-1957, 227, -465}, exactPosition = true},
@@ -464,23 +498,6 @@
       {name = "Windset", pos = {2851, 178, 2703}},
       {name = "Zeus Storm", pos = {-4326, -627, 2687}},
   }
-  totemMenu.title = label("Totems", 14, 396, 11)
-  totemMenu.title.Color = C.yellow
-  totemMenu.arrow = label("v", PANEL_W - 24, 394, 14)
-  local function totemLabel(text, x, offset, size, color)
-      local d = label(text, x, totemMenu.top + offset, size)
-      d.Color = color or C.white
-      totemMenu.drawings[d] = offset
-      d.Visible = false
-      return d
-  end
-  for i = 1, totemMenu.pageSize do
-      totemMenu.slots[i] = totemLabel("", 26, 38 + (i - 1) * 27, 12)
-  end
-  totemMenu.prev = totemLabel("< Prev", 14, 204, 11, C.cyan)
-  totemMenu.pageLabel = totemLabel("1 / 3", 113, 204, 11, C.muted)
-  totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
-  totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
   islandMenu.rows = {
       {name = "Ancient Isle", pos = {6050, 195, 330}},
       {name = "Castaway Cliffs", pos = {690, 135, -1693}},
@@ -505,23 +522,117 @@
       {name = "The Depths", pos = {980, -710, 1320}},
       {name = "Tidefall", pos = {3223, 130, 850}},
   }
-  islandMenu.title = label("Islands", 14, 428, 11)
-  islandMenu.title.Color = C.pink
-  islandMenu.arrow = label("v", PANEL_W - 24, 426, 14)
-  local function islandLabel(text, x, offset, size, color)
-      local d = label(text, x, islandMenu.top + offset, size)
-      d.Color = color or C.white
-      islandMenu.drawings[d] = offset
-      d.Visible = false
-      return d
+  local function ensureTeleportHeaders()
+      if teleportHeadersBuilt then return end
+      totemMenu.title = label("Totems", 14, 396, 11)
+      totemMenu.title.Color = C.yellow
+      totemMenu.arrow = label("v", PANEL_W - 24, 394, 14)
+      islandMenu.title = label("Islands", 14, 428, 11)
+      islandMenu.title.Color = C.pink
+      islandMenu.arrow = label("v", PANEL_W - 24, 426, 14)
+      teleportHeadersBuilt = true
   end
-  for i = 1, islandMenu.pageSize do
-      islandMenu.slots[i] = islandLabel("", 26, 38 + (i - 1) * 27, 12)
+  local function ensureNpcMenuDrawings()
+      if npcMenuBuilt then return end
+      ensureTeleportHeaders()
+      npcLabel("CUSTOM GPS", 14, 393, 10, C.cyan)
+      npcRule(441, C.cyan)
+      npcSubArrow = npcLabel("v", PANEL_W - 24, 458, 14, C.green)
+      npcLabel("NPCs", 14, 460, 11, C.green)
+      npcRule(480, C.yellow)
+      npcLabel("BUFFERS", 14, 488, 10, C.yellow)
+      npcLabel("Merlin", 26, 512, 12)
+      npcLabel("Astronomer Vega", 26, 540, 12)
+      npcRule(568, C.pink)
+      npcLabel("SHOPS", 14, 576, 10, C.pink)
+      npcLabel("Daily Shopkeeper", 26, 600, 12)
+      npcLabel("Rare Goods Dealer", 26, 628, 12)
+      npcLabel("Elder Kaito", 26, 656, 12)
+      npcRule(684, Color3.fromRGB(255, 175, 90))
+      npcLabel("ETC", 14, 692, 10, Color3.fromRGB(255, 175, 90))
+      npcLabel("Shells", 26, 716, 12)
+      npcStatus = npcLabel("Click a name to teleport", 14, 744, 10, C.muted)
+      customGpsFallbackBox = add("Square", 10, 406)
+      customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
+      customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
+      customGpsFallbackBox.Filled = true
+      customGpsFallbackBox.Visible = false
+      npcMenuDrawings[customGpsFallbackBox] = 406
+      customGpsFallbackText = label("(type GPS cords here)", 16, 411, 10)
+      customGpsFallbackText.Color = C.muted
+      customGpsFallbackText.Visible = false
+      npcMenuDrawings[customGpsFallbackText] = 406
+      npcLabel("Teleport to GPS", 14, 432, 10, C.blue)
+      npcMenuBuilt = true
   end
-  islandMenu.prev = islandLabel("< Prev", 14, 204, 11, C.cyan)
-  islandMenu.pageLabel = islandLabel("1 / 2", 113, 204, 11, C.muted)
-  islandMenu.next = islandLabel("Next >", 213, 204, 11, C.cyan)
-  islandMenu.status = islandLabel("Click to teleport", 14, 229, 10, C.muted)
+  local function setNpcStatus(text)
+      -- The GPS action can be reached during the first dropdown frame, before
+      -- the lazily-created status label exists.  Build it on demand instead
+      -- of indexing nil and stopping the whole macro.
+      if not npcStatus then pcall(ensureNpcMenuDrawings) end
+      if npcStatus then npcStatus.Text = text end
+  end
+  local function ensureTotemMenuDrawings()
+      if totemMenuBuilt then return end
+      ensureNpcMenuDrawings()
+      local function totemLabel(text, x, offset, size, color)
+          local d = label(text, x, totemMenu.top + offset, size)
+          d.Color = color or C.white
+          totemMenu.drawings[d] = offset
+          d.Visible = false
+          return d
+      end
+      for i = 1, totemMenu.pageSize do
+          totemMenu.slots[i] = totemLabel("", 26, 38 + (i - 1) * 27, 12)
+      end
+      totemMenu.prev = totemLabel("< Prev", 14, 204, 11, C.cyan)
+      totemMenu.pageLabel = totemLabel("1 / 3", 113, 204, 11, C.muted)
+      totemMenu.next = totemLabel("Next >", 213, 204, 11, C.cyan)
+      totemMenu.status = totemLabel("Click to teleport; buy manually", 14, 229, 10, C.muted)
+      totemMenuBuilt = true
+  end
+  local function ensureIslandMenuDrawings()
+      if islandMenuBuilt then return end
+      ensureNpcMenuDrawings()
+      local function islandLabel(text, x, offset, size, color)
+          local d = label(text, x, islandMenu.top + offset, size)
+          d.Color = color or C.white
+          islandMenu.drawings[d] = offset
+          d.Visible = false
+          return d
+      end
+      for i = 1, islandMenu.pageSize do
+          islandMenu.slots[i] = islandLabel("", 26, 38 + (i - 1) * 27, 12)
+      end
+      islandMenu.prev = islandLabel("< Prev", 14, 204, 11, C.cyan)
+      islandMenu.pageLabel = islandLabel("1 / 2", 113, 204, 11, C.muted)
+      islandMenu.next = islandLabel("Next >", 213, 204, 11, C.cyan)
+      islandMenu.status = islandLabel("Click to teleport", 14, 229, 10, C.muted)
+      islandMenuBuilt = true
+  end
+  ensureAutoTotemDrawings = function()
+      if autoTotemBuilt then return end
+      local function autoTotemLabel(text, x, offset, size, color)
+          local d = label(text, x, autoTotem.top + offset, size)
+          d.Color = color or C.white
+          autoTotem.drawings[d] = offset
+          d.Visible = false
+          return d
+      end
+      autoTotem.notice1 = autoTotemLabel("Sundials use the 8th hotbar slot", PANEL_W / 2, 18, 11, C.white)
+      autoTotem.notice2 = autoTotemLabel("Luck Totem uses the 9th hotbar slot", PANEL_W / 2, 35, 11, C.white)
+      autoTotem.notice3 = autoTotemLabel("Aurora / Tropical Sun / Rainbow", PANEL_W / 2, 52, 10, C.muted)
+      autoTotem.notice4 = autoTotemLabel("Place both totems before enabling", PANEL_W / 2, 69, 10, C.muted)
+      autoTotem.notice1.Center = true
+      autoTotem.notice2.Center = true
+      autoTotem.notice3.Center = true
+      autoTotem.notice4.Center = true
+      autoTotem.toggleText = autoTotemLabel("Auto Totem OFF", 14, 96, 11, C.instantOff)
+      autoTotem.helpText = autoTotemLabel("Click to enable / disable", 14, 119, 9, C.muted)
+      autoTotem.status = autoTotemLabel("Status: Waiting", 14, 141, 9, C.muted)
+      autoTotem.luckToggleText = autoTotemLabel("Luck Totems ON", 14, 164, 10, C.instantOn)
+      autoTotemBuilt = true
+  end
   local function npcName(value)
       return tostring(value):lower():gsub("[^%w]", "")
   end
@@ -850,7 +961,7 @@
                   task.wait(0.03)
               end
           else
-              task.wait(0.05)
+              task.wait(0.50)
           end
       end
   end)
@@ -870,7 +981,10 @@
       local y = panelY or (viewport
           and math.max(8, (viewport.Y - drawH) / 2) or 260
       )
-      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      local dropdownHeight = math.max(32,
+          npcMenuOpen
+              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              or (autoTotem.open and 212 or 32)) * uiScale
       local dropdownX = teleportWindow.x or x
       local dropdownY = teleportWindow.y or (y + PANEL_H * uiScale + 8)
       if viewport then
@@ -886,7 +1000,8 @@
       teleportWindow.bg.Size = Vector2.new(PANEL_W * uiScale, dropdownHeight)
       teleportWindow.border.Position = Vector2.new(dropdownX, dropdownY)
       teleportWindow.border.Size = Vector2.new(PANEL_W * uiScale, dropdownHeight)
-      local windowVisible = shown and npcMenuOpen and npcMenuAnim > 0.001
+      local windowVisible = shown and ((npcMenuOpen and npcMenuAnim > 0.001)
+          or (autoTotem.open and autoTotem.anim > 0.001))
       teleportWindow.bg.Visible, teleportWindow.border.Visible = windowVisible, windowVisible
       if customGpsFallbackBox then
           local visible = shown and npcMenuOpen
@@ -894,7 +1009,8 @@
           customGpsFallbackText.Visible = visible
       end
       for _, entry in ipairs(layout) do
-          local isMenuEntry = npcMenuDrawings[entry.d] or totemMenu.drawings[entry.d]
+          local isMenuEntry = npcMenuDrawings[entry.d] or autoTotem.drawings[entry.d]
+              or totemMenu.drawings[entry.d]
               or islandMenu.drawings[entry.d] or entry.d == totemMenu.title
               or entry.d == totemMenu.arrow or entry.d == islandMenu.title
               or entry.d == islandMenu.arrow
@@ -923,8 +1039,12 @@
       local value = ismouse2pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
       local x, y = cursor.X, cursor.Y
-      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
-      local inDropdown = focused and shown and npcMenuOpen and teleportWindow.x and teleportWindow.y
+      local dropdownHeight = math.max(32,
+          npcMenuOpen
+              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              or (autoTotem.open and 212 or 32)) * uiScale
+      local inDropdown = focused and shown and (npcMenuOpen or autoTotem.open)
+          and teleportWindow.x and teleportWindow.y
           and x >= teleportWindow.x and x <= teleportWindow.x + PANEL_W * uiScale
           and y >= teleportWindow.y and y <= teleportWindow.y + dropdownHeight
       if inDropdown and down then
@@ -974,7 +1094,12 @@
       border.Color = edgeColor
       accent.Color = edgeColor
       teleportWindow.border.Color = edgeColor
-      local teleportAlpha = shown and npcMenuOpen and npcMenuAnim or 0
+      -- Keep this numeric when the GUI is hidden; `shown and ...` would
+      -- otherwise produce false and the transparency multiplication below
+      -- would throw.
+      local teleportAlpha = shown
+          and (npcMenuOpen and npcMenuAnim or autoTotem.open and autoTotem.anim or 0)
+          or 0
       teleportWindow.bg.Transparency = 0.64 * fadeAmount * teleportAlpha
       teleportWindow.border.Transparency = fadeAmount * teleportAlpha
       teleportWindow.bg.Visible = teleportAlpha > 0.001
@@ -1005,6 +1130,8 @@
               menuAlpha = totemMenu.anim
           elseif islandMenu.drawings[entry.d] then
               menuAlpha = islandMenu.anim
+          elseif autoTotem.drawings[entry.d] then
+              menuAlpha = autoTotem.anim
           elseif entry.d == totemMenu.title or entry.d == totemMenu.arrow
               or entry.d == islandMenu.title or entry.d == islandMenu.arrow then
               menuAlpha = npcMenuAnim
@@ -1086,6 +1213,8 @@
           mouse1release()
           releaseAt = nil
           castMeter, castFill, castGreen = nil, nil, nil
+          perfectCastNextUpdate = 0
+          perfectCastPercent, perfectCastInGreen = nil, false
       end
   end
   local function castReading()
@@ -1107,8 +1236,11 @@
       local lower = math.clamp(1 - (greenPos.Y + greenSize.Y - origin.Y) / size.Y, 0, 1)
       local upper = math.clamp(1 - (greenPos.Y - origin.Y) / size.Y, 0, 1)
       if upper <= lower then return nil end
-      local target = lower + (upper - lower) * 0.75
-      return amount * 100, amount >= target and amount <= upper
+      -- Perfect mode samples this meter every 0.1s.  Use the complete green
+      -- interval so a sample near the start of the zone is not discarded.
+      local tolerance = 0.015
+      return amount * 100,
+          amount >= lower - tolerance and amount <= upper + tolerance
   end
   local function releaseKey()
       if pendingKey then
@@ -1209,18 +1341,18 @@
           end
       end
       if not pos then
-          npcStatus.Text = row.name .. ": not loaded"
+          setNpcStatus(row.name .. ": not loaded")
           return
       end
       local moved, err = writeTeleport(root, pos, {
           0, row.exactPosition and 0 or 2, row.exactPosition and 0 or 4
       }, 6)
       if not moved then
-          npcStatus.Text = "Teleport write failed"
+          setNpcStatus("Teleport write failed")
           warn("NPC teleport: " .. tostring(err))
           return
       end
-      npcStatus.Text = row.name .. (live and ": moved" or ": map location")
+      setNpcStatus(row.name .. (live and ": moved" or ": map location"))
   end
   local function resizePanel(delta)
       uiScale = math.clamp(uiScale + delta, MIN_UI_SCALE, MAX_UI_SCALE)
@@ -1229,20 +1361,28 @@
   local function layoutTeleportMenus()
       totemMenu.top = 388 + (npcSubOpen and 368 or 95) * npcMenuAnim
       islandMenu.top = totemMenu.top + 48 + 221 * (totemMenu.open and 1 or 0)
+      autoTotem.top = 420
       npcArrow.Text = npcMenuOpen and "^" or "v"
-      npcSubArrow.Text = npcSubOpen and "^" or "v"
-      totemMenu.arrow.Text = totemMenu.open and "^" or "v"
-      islandMenu.arrow.Text = islandMenu.open and "^" or "v"
+      if npcSubArrow then npcSubArrow.Text = npcSubOpen and "^" or "v" end
+      if totemMenu.arrow then totemMenu.arrow.Text = totemMenu.open and "^" or "v" end
+      if islandMenu.arrow then islandMenu.arrow.Text = islandMenu.open and "^" or "v" end
+      autoTotem.arrow.Text = autoTotem.open and "^" or "v"
       local automationOffset = automationMenuOpen and 0 or -141
-      PANEL_H = 497 + automationOffset
+      -- Fish ESP occupies the 406-470 band.  Keep Auto Totem in its own row
+      -- immediately below it and above the Teleports row.
+      autoTotem.tabTop = 474 + automationOffset
+      teleportsTabTop = 506 + automationOffset
+      PANEL_H = 561 + automationOffset
       local compactPositions = {
           [fishEsp.heading] = 406,
           [fishEsp.box] = 422,
           [fishEsp.input] = 427,
           [fishEsp.toggle] = 449,
           [fishEsp.status] = 449,
-          [npcToggleText] = 474,
-          [npcArrow] = 472,
+          [autoTotem.title] = 474,
+          [autoTotem.arrow] = 472,
+          [npcToggleText] = 506,
+          [npcArrow] = 504,
       }
       for _, entry in ipairs(layout) do
           local base = compactPositions[entry.d]
@@ -1262,6 +1402,9 @@
               entry.y = islandMenu.top + 8
           elseif entry.d == islandMenu.arrow then
               entry.y = islandMenu.top + 6
+          elseif autoTotem.drawings[entry.d] then
+              entry.y = autoTotem.top + autoTotem.drawings[entry.d]
+                  - (1 - autoTotem.anim) * 6
           elseif islandMenu.drawings[entry.d] then
               entry.y = islandMenu.top + islandMenu.drawings[entry.d]
                   - (1 - islandMenu.anim) * 6
@@ -1273,24 +1416,28 @@
                   - (1 - totemMenu.anim) * 6
           end
       end
-      for i, d in ipairs(totemMenu.slots) do
-          local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + i]
-          d.Text = row and row.name or ""
+      if totemMenuBuilt then
+          for i, d in ipairs(totemMenu.slots) do
+              local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + i]
+              d.Text = row and row.name or ""
+          end
+          totemMenu.pageLabel.Text = totemMenu.page .. " / "
+              .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
       end
-      totemMenu.pageLabel.Text = totemMenu.page .. " / "
-          .. math.ceil(#totemMenu.rows / totemMenu.pageSize)
-      for i, d in ipairs(islandMenu.slots) do
-          local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + i]
-          d.Text = row and row.name or ""
-          for _, entry in ipairs(layout) do
-              if entry.d == d then
-                  entry.y = islandMenu.top + 38 + (i - 1) * 27
-                  break
+      if islandMenuBuilt then
+          for i, d in ipairs(islandMenu.slots) do
+              local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + i]
+              d.Text = row and row.name or ""
+              for _, entry in ipairs(layout) do
+                  if entry.d == d then
+                      entry.y = islandMenu.top + 38 + (i - 1) * 27
+                      break
+                  end
               end
           end
+          islandMenu.pageLabel.Text = islandMenu.page .. " / "
+              .. math.ceil(#islandMenu.rows / islandMenu.pageSize)
       end
-      islandMenu.pageLabel.Text = islandMenu.page .. " / "
-          .. math.ceil(#islandMenu.rows / islandMenu.pageSize)
       panelX, panelY = lastPanelX, lastPanelY
       lastPanelX, lastPanelY = nil, nil
       positionPanel()
@@ -1301,10 +1448,16 @@
       local npcTarget = npcMenuOpen and 1 or 0
       local totemTarget = totemMenu.open and 1 or 0
       local islandTarget = islandMenu.open and 1 or 0
+      local autoTotemTarget = autoTotem.open and 1 or 0
       local blend = 1 - math.exp(-dt * 24)
       npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
       totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
       islandMenu.anim = islandMenu.anim + (islandTarget - islandMenu.anim) * blend
+      autoTotem.anim = autoTotem.anim + (autoTotemTarget - autoTotem.anim) * blend
+      local needsLayout = math.abs(npcMenuAnim - npcTarget) > 0.0001
+          or math.abs(totemMenu.anim - totemTarget) > 0.0001
+          or math.abs(islandMenu.anim - islandTarget) > 0.0001
+          or math.abs(autoTotem.anim - autoTotemTarget) > 0.0001
       if math.abs(npcMenuAnim - npcTarget) < 0.002 then
           npcMenuAnim = npcTarget
       end
@@ -1314,7 +1467,10 @@
       if math.abs(islandMenu.anim - islandTarget) < 0.002 then
           islandMenu.anim = islandTarget
       end
-      layoutTeleportMenus()
+      if math.abs(autoTotem.anim - autoTotemTarget) < 0.002 then
+          autoTotem.anim = autoTotemTarget
+      end
+      if needsLayout then layoutTeleportMenus() end
   end
   local function teleportTotem(row)
       prepareTeleport()
@@ -1419,6 +1575,43 @@
   fishEsp.normalize = function(value)
       return tostring(value or ""):lower():gsub("[^%w]", "")
   end
+  fishEsp.isHuntName = function(value)
+      local name = fishEsp.normalize(value)
+      for _, pattern in ipairs({
+          "megalodon", "seiwhale", "isonade", "colossalsquid",
+          "mosasaurus", "nessie", "leviathan", "kraken", "whaleshark",
+          "scylla", "colossaldragon", "frostwyrm", "tidefall", "patshark",
+      }) do
+          if name:find(pattern, 1, true) then return true end
+      end
+      return false
+  end
+  fishEsp.huntRoots = function()
+      local roots, seen = {}, {}
+      local function add(root)
+          if root and not seen[root] then
+              seen[root] = true
+              roots[#roots + 1] = root
+          end
+      end
+      local active = W:FindFirstChild("active")
+      add(active and active:FindFirstChild("FinalAbundanceSpawns"))
+      add(W:FindFirstChild("DreadfinHuntPools"))
+      local hades = W:FindFirstChild("HadesStuff")
+      add(hades and hades:FindFirstChild("Hunt"))
+      -- Some hunt fish are replicated through the regular fish hierarchy
+      -- when they are close enough to stream in.  This is an exact hunt-name
+      -- fallback only; normal roaming fish are never accepted as targets.
+      add(active and active:FindFirstChild("roamingFish"))
+      for _, root in ipairs(W:GetDescendants()) do
+          local name = root.Name:lower()
+          if name == "newabundances" or name == "abundancespawns"
+              or name == "huntpools" or name == "hunt" then
+              add(root)
+          end
+      end
+      return roots
+  end
   fishEsp.distance = function(a, b)
       local prev = {}
       for j = 0, #b do prev[j] = j end
@@ -1469,14 +1662,24 @@
           local seen = {}
           for value in fishEsp.text:gmatch("[^,;]+") do
               local query = fishEsp.normalize(value):sub(1, 64)
-              if query ~= "" and not seen[query] and #fishEsp.queries < 8 then
+              if #query >= 3 and query:find("%a") and not seen[query]
+                  and #fishEsp.queries < 8 then
                   seen[query] = true
                   fishEsp.queries[#fishEsp.queries + 1] = query
               end
           end
+          fishEsp.rareRequested = false
+          for _, query in ipairs(fishEsp.queries) do
+              if fishEsp.isHuntName(query) then
+                  fishEsp.rareRequested = true
+                  break
+              end
+          end
+          fishEsp.queryReady = #fishEsp.queries > 0
           fishEsp.setTargets({})
       end
-      if not fishEsp.queries or #fishEsp.queries == 0 then
+      if not fishEsp.queryReady then
+          fishEsp.scan = nil
           fishEsp.status.Text = "Enter fish names"
           return
       end
@@ -1489,33 +1692,49 @@
           local active = W:FindFirstChild("active")
           local roaming = active and active:FindFirstChild("roamingFish")
           local moved = fishEsp.areaOrigin and (origin - fishEsp.areaOrigin).Magnitude >= 250
-          if roaming ~= fishEsp.areaFolder or moved then
+          if not fishEsp.rareRequested and (roaming ~= fishEsp.areaFolder or moved) then
               fishEsp.scan = nil
               fishEsp.areaFolder, fishEsp.areaOrigin = roaming, origin
-          elseif not fishEsp.areaOrigin then
+          elseif not fishEsp.rareRequested and not fishEsp.areaOrigin then
               fishEsp.areaOrigin = origin
           end
       end
       if not fishEsp.scan then
           if now < (fishEsp.retryAt or 0) then return end
-          local active = W:FindFirstChild("active")
-          local roaming = active and active:FindFirstChild("roamingFish")
-          if not roaming then
-              fishEsp.status.Text = "Waiting for live fish"
+          local scanRoots
+          if fishEsp.rareRequested then
+              scanRoots = fishEsp.huntRoots()
+          else
+              local active = W:FindFirstChild("active")
+              local roaming = active and active:FindFirstChild("roamingFish")
+              scanRoots = roaming and {roaming} or {}
+          end
+          if #scanRoots == 0 then
+              fishEsp.status.Text = fishEsp.rareRequested
+                  and "Waiting for active hunt / abundance fish"
+                  or "Waiting for live fish"
               fishEsp.retryAt = now + 5
               return
           end
           fishEsp.scan = {
-              queue = {{object = roaming}}, index = 1, targets = {},
-              seen = {}, names = {}, root = roaming,
+              queue = {}, index = 1, targets = {},
+              seen = {}, names = {}, root = scanRoots[1],
           }
+          for _, root in ipairs(scanRoots) do
+              fishEsp.scan.queue[#fishEsp.scan.queue + 1] = {object = root}
+          end
       end
       local scan = fishEsp.scan
+      fishEsp.status.Text = fishEsp.rareRequested
+          and "Scanning hunt / abundance fish..."
+          or "Scanning for fish..."
       for step = 1, (panelInputCaptured or dragging) and 1 or 4 do
           local item = scan.queue[scan.index]
           if not item then
               fishEsp.setTargets(scan.targets)
-              fishEsp.status.Text = #scan.targets .. " fish | refresh 5s"
+              fishEsp.status.Text = #scan.targets .. " fish | "
+                  .. (fishEsp.rareRequested and "hunt full-map" or "local scan")
+                  .. " | refresh 5s"
               fishEsp.scan = nil
               fishEsp.retryAt = now + 5
               return
@@ -1538,7 +1757,9 @@
                   part = object.PrimaryPart or object:FindFirstChild("Hitbox")
                       or object:FindFirstChild("Center")
               end
-              local inRange = not part or (part.Position - origin).Magnitude <= 1000
+              local huntName = fishEsp.isHuntName(name)
+              local inRange = (fishEsp.rareRequested and huntName) or not part
+                  or (part.Position - origin).Magnitude <= 1000
               if not container and not inRange then return end
               local matches = scan.names[name]
               if class == "Folder" or not inRange then matches = false end
@@ -1566,10 +1787,11 @@
               end
               if part and owner and not scan.seen[owner] and #scan.targets < 64 then
                   local position = part.Position
-                  if (position - origin).Magnitude <= 1000 then
+                  if huntName or (position - origin).Magnitude <= 1000 then
                       scan.seen[owner] = true
                       scan.targets[#scan.targets + 1] = {
                           model = owner, part = part, name = ownerName, fixedPart = true,
+                          fullMap = fishEsp.isHuntName(ownerName),
                       }
                       fishEsp.liveSeen = fishEsp.liveSeen or {}
                       if not fishEsp.liveSeen[owner] and #fishEsp.targets < 64 then
@@ -1613,8 +1835,8 @@
       for _, entry in ipairs(targets) do
           local keep = false
           pcall(function()
-              keep = entry.model.Parent and entry.part.Parent
-                  and (entry.part.Position - origin).Magnitude <= 1000
+                  keep = entry.model.Parent and entry.part.Parent
+                      and (entry.fullMap or (entry.part.Position - origin).Magnitude <= 1000)
           end)
           if keep then activeTargets[#activeTargets + 1] = entry end
       end
@@ -1639,7 +1861,7 @@
               end
               local position = entry.part.Position
               local distance = (position - origin).Magnitude
-              if distance > 1000 then
+              if not entry.fullMap and distance > 1000 then
                   if drawing then drawing.Visible = false end
                   return
               end
@@ -1691,18 +1913,24 @@
           pcall(setrobloxinput, true)
       end
       fishEsp.keys[0x0D] = enter
-      fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
+      fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
+          or "fish names; hunt names get full-map ESP"
       fishEsp.input.Color = fishEsp.text ~= "" and C.white or C.muted
   end
   fishEsp.toggleEnabled = function()
       fishEsp.editing = false
       fishEsp.scan = nil
       fishEsp.searchText = nil
+      fishEsp.queryReady = false
       fishEsp.retryAt = 0
       fishEsp.enabled = not fishEsp.enabled
       fishEsp.toggle.Text = fishEsp.enabled and "Fish ESP ON" or "Fish ESP OFF"
       fishEsp.toggle.Color = fishEsp.enabled and C.instantOn or C.instantOff
-      if not fishEsp.enabled then fishEsp.clearDrawings() end
+      if not fishEsp.enabled then
+          fishEsp.clearDrawings()
+      elseif not fishEsp.queryReady then
+          fishEsp.status.Text = "Enter fish names"
+      end
   end
   task.spawn(function()
       while alive do
@@ -1717,7 +1945,7 @@
                   warn("Fish ESP scan: " .. tostring(err))
               end
           end
-          task.wait(fishEsp.enabled and 0.04 or 0.10)
+      task.wait(fishEsp.enabled and fishEsp.queryReady and 0.08 or 0.75)
       end
   end)
   task.spawn(function()
@@ -1725,7 +1953,7 @@
           if fishEsp.enabled then
               pcall(fishEsp.update, tick())
           end
-          task.wait(fishEsp.enabled and 1 / 30 or 0.10)
+      task.wait(fishEsp.enabled and fishEsp.queryReady and 1 / 30 or 0.75)
       end
   end)
   local function teleportCustomGps()
@@ -1740,37 +1968,30 @@
       end
       local x, y, z = numbers[1], numbers[2], numbers[3]
       if not (x and y and z) then
-          npcStatus.Text = "Enter three GPS numbers in the GPS box"
+          setNpcStatus("Enter three GPS numbers in the GPS box")
           return
       end
       local root = characterRoot(npcStatus)
       if not root then return end
       local ok, err = writeTeleport(root, Vector3.new(x, y, z), {0, 3, 3})
-      npcStatus.Text = ok and string.format("Custom GPS: %.1f, %.1f, %.1f", x, y, z)
-          or "Teleport write failed"
+      setNpcStatus(ok and string.format("Custom GPS: %.1f, %.1f, %.1f", x, y, z)
+          or "Teleport write failed")
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
   end
-  customGpsFallbackBox = add("Square", 10, 406)
-  customGpsFallbackBox.Size = Vector2.new(PANEL_W - 28, 24)
-  customGpsFallbackBox.Color = Color3.fromRGB(35, 42, 56)
-  customGpsFallbackBox.Filled = true
-  customGpsFallbackBox.Visible = false
-  npcMenuDrawings[customGpsFallbackBox] = 406
-  customGpsFallbackText = label("(type GPS cords here)", 16, 411, 10)
-  customGpsFallbackText.Color = C.muted
-  customGpsFallbackText.Visible = false
-  npcMenuDrawings[customGpsFallbackText] = 406
-  npcLabel("Teleport to GPS", 14, 432, 10, C.blue)
   local function updatePanelInput(focused)
       local x, y = cursor.X, cursor.Y
       local dropdownX = teleportWindow.x
       local dropdownY = teleportWindow.y
-      local dropdownHeight = math.max(32, islandMenu.top + 32 + 221 * islandMenu.anim - 388) * uiScale
+      local dropdownHeight = math.max(32,
+          npcMenuOpen
+              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              or (autoTotem.open and 212 or 32)) * uiScale
       local insideMain = focused and shown and lastPanelX and lastPanelY
           and type(x) == "number" and type(y) == "number"
           and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
           and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
-      local insideDropdown = focused and shown and npcMenuOpen and dropdownX and dropdownY
+      local insideDropdown = focused and shown and (npcMenuOpen or autoTotem.open)
+          and dropdownX and dropdownY
           and type(x) == "number" and type(y) == "number"
           and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
           and y >= dropdownY and y <= dropdownY + dropdownHeight
@@ -1833,7 +2054,8 @@
           and contentY >= 420 and contentY < 446 then
           fishEsp.editing = true
           fishEsp.keys = {}
-          fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44) or "fish names, separated by commas"
+          fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
+              or "fish names; hunt names get full-map ESP"
       elseif inside and not dragging and down and not leftWasDown
           and contentY >= 444 and contentY <= 470 then
           fishEsp.toggleEnabled()
@@ -1886,9 +2108,26 @@
           toggleHarpoonPull()
       end
       if inside and not dragging and down and not leftWasDown then
-          if insideMain and contentY >= 467 and contentY <= 497 then
-              npcMenuOpen = not npcMenuOpen
+          if insideMain
+              and localX >= 8 and localX <= PANEL_W - 8
+              and localY >= autoTotem.tabTop - 1
+              and localY < autoTotem.tabTop + 23 then
+              autoTotem.open = not autoTotem.open
+              if autoTotem.open then ensureAutoTotemDrawings() end
+              npcMenuOpen = false
+              npcSubOpen = false
               totemMenu.open, islandMenu.open = false, false
+              totemMenu.anim, islandMenu.anim = 0, 0
+              if not autoTotem.open then autoTotem.anim = 0 end
+              layoutTeleportMenus()
+          elseif insideMain
+              and localX >= 8 and localX <= PANEL_W - 8
+              and localY >= teleportsTabTop - 1
+              and localY < teleportsTabTop + 23 then
+              npcMenuOpen = not npcMenuOpen
+              if npcMenuOpen then ensureNpcMenuDrawings() end
+              totemMenu.open, islandMenu.open, autoTotem.open = false, false, false
+              autoTotem.anim = 0
               if not npcMenuOpen then customGpsEditing = false end
               layoutTeleportMenus()
           elseif insideDropdown and localY >= 406 and localY < 430 then
@@ -1904,6 +2143,7 @@
           elseif insideDropdown and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
               if islandMenu.open then
+                  ensureIslandMenuDrawings()
                   totemMenu.open = false
                   totemMenu.anim = 0
               end
@@ -1911,11 +2151,12 @@
           elseif insideDropdown and localY >= totemMenu.top and localY < totemMenu.top + 32 then
               totemMenu.open = not totemMenu.open
               if totemMenu.open then
+                  ensureTotemMenuDrawings()
                   islandMenu.open = false
                   islandMenu.anim = 0
-              end
-              layoutTeleportMenus()
-          elseif insideDropdown and islandMenu.open then
+               end
+               layoutTeleportMenus()
+           elseif insideDropdown and islandMenu.open then
               local offset = localY - islandMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#islandMenu.rows / islandMenu.pageSize)
@@ -1927,7 +2168,7 @@
                   local row = islandMenu.rows[(islandMenu.page - 1) * islandMenu.pageSize + slot]
                   if row then teleportIsland(row) end
               end
-          elseif insideDropdown and totemMenu.open then
+           elseif insideDropdown and totemMenu.open then
               local offset = localY - totemMenu.top
               if offset >= 198 and offset < 224 then
                   local pages = math.ceil(#totemMenu.rows / totemMenu.pageSize)
@@ -1937,9 +2178,18 @@
               elseif offset >= 32 and offset < 32 + totemMenu.pageSize * 27 then
                   local slot = math.floor((offset - 32) / 27) + 1
                   local row = totemMenu.rows[(totemMenu.page - 1) * totemMenu.pageSize + slot]
-                  if row then teleportTotem(row) end
-              end
-          elseif insideDropdown then
+                   if row then teleportTotem(row) end
+               end
+           elseif insideDropdown and autoTotem.open then
+               local offset = localY - autoTotem.top
+               if offset >= 86 and offset < 122 then
+                   ensureAutoTotemDrawings()
+                   autoTotem.toggle()
+               elseif offset >= 150 and offset < 184 then
+                   ensureAutoTotemDrawings()
+                   autoTotem.toggleLuck()
+               end
+           elseif insideDropdown then
               for _, row in ipairs(npcRows) do
                   if localX >= 12 and localX <= PANEL_W - 12
                       and localY >= row.y and localY < row.y + 27 then
@@ -1966,10 +2216,9 @@
       end
       return nil
   end
-  local function equippedRod()
-      local character = player.Character
-      if not character then return nil end
-      for _, tool in ipairs(character:GetChildren()) do
+  findFishingRod = function(container)
+      if not container then return nil end
+      for _, tool in ipairs(container:GetChildren()) do
           if tool.ClassName == "Tool" then
               local events = tool:FindFirstChild("events")
               local cast = events and events:FindFirstChild("castAsync")
@@ -1979,6 +2228,50 @@
           end
       end
       return nil
+  end
+  local function equippedRod()
+      return findFishingRod(player.Character)
+  end
+  ensureFishingRod = function()
+      if equippedRod() then return true end
+      local backpack = player:FindFirstChildOfClass("Backpack")
+      local rod = findFishingRod(backpack)
+      local character = player.Character
+      local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+      if not rod or not humanoid then return false end
+      local ok = pcall(function() humanoid:EquipTool(rod) end)
+      return ok and equippedRod() ~= nil
+  end
+  stellarwaveRodEquipped = function()
+      local rod = equippedRod()
+      if not rod then return false end
+      local name = tostring(rod.Name):lower()
+      return name:find("stellarwave", 1, true) ~= nil
+          and name:find("melody", 1, true) ~= nil
+  end
+  fishingMinigameActive = function()
+      gui = player and player:FindFirstChild("PlayerGui") or gui
+      local reel = gui and gui:FindFirstChild("reel")
+      local bar = reel and reel:FindFirstChild("bar")
+      local fish = bar and bar:FindFirstChild("fish")
+      local playerbar = bar and bar:FindFirstChild("playerbar")
+      return reel ~= nil and bar ~= nil and fish ~= nil and playerbar ~= nil
+  end
+  local function requestRodReequip(now)
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      recoveryStage = 0
+      equipPending = true
+      equipReadyAt = 0
+      nextEquipAttemptAt = now
+      nextCast = now + 0.25
+      if now - lastReequipAt >= 0.80 then
+          lastReequipAt = now
+          display("FAILED CAST / REQUIPPING ROD")
+          warn("Fisch Macro: failed cast; rod is not equipped, requipping rod")
+      end
   end
   local function catches()
       local stats = W:FindFirstChild("PlayerStats")
@@ -2039,7 +2332,8 @@
   end
   local function readEnvironment(now)
       gui = player and player:FindFirstChild("PlayerGui") or gui
-      world = RS and RS:FindFirstChild("world") or nil
+      world = (W and W:FindFirstChild("world"))
+          or (RS and RS:FindFirstChild("world")) or nil
       local events, descriptions = {}, {}
       local seenEvents, seenDescriptions = {}, {}
       local serverNow = now
@@ -2414,7 +2708,7 @@
       end
       return first, second ~= "" and second or nil
   end
-  local function environmentText(events, now)
+  environmentText = function(events, now)
       if #events == 0 then
           eventHeading.Text = "WEATHER / EVENTS"
           for _, line in ipairs(weatherLines) do line.Text = "" end
@@ -2512,7 +2806,447 @@
       end
       environmentText(cachedEvents, now)
   end
-  local function disableInstant()
+  autoTotem.setStatus = function(text, color)
+      if not autoTotem.status then ensureAutoTotemDrawings() end
+      autoTotem.status.Text = "Status: " .. tostring(text)
+      autoTotem.status.Color = color or C.muted
+  end
+
+  autoTotem.detectSlot9 = function()
+      gui = player and player:FindFirstChild("PlayerGui") or gui
+      local backpackGui = gui and gui:FindFirstChild("backpack")
+      local hotbar = backpackGui and backpackGui:FindFirstChild("hotbar")
+      if not hotbar then return nil, nil end
+      local entries = {}
+      for _, item in ipairs(hotbar:GetChildren()) do
+          if item.ClassName == "ImageButton" then
+              local label = item:FindFirstChild("ItemName", true)
+              local text
+              if label then pcall(function() text = label.Text end) end
+              if type(text) == "string" and text ~= "" then
+                  local position
+                  pcall(function() position = item.AbsolutePosition end)
+                  entries[#entries + 1] = {
+                      text = text,
+                      x = position and position.X or (#entries + 1),
+                  }
+              end
+          end
+      end
+      table.sort(entries, function(left, right) return left.x < right.x end)
+      local slot9 = entries[9]
+      if not slot9 then return nil, nil end
+      local normalized = slot9.text:lower():gsub("[^%w]", "")
+      if normalized:find("aurora", 1, true) or normalized:find("lucktotem", 1, true) then
+          return "luck", slot9.text
+      end
+      if normalized:find("tropicalsun", 1, true) then
+          return "tropical", slot9.text
+      end
+      if normalized:find("rainbow", 1, true) then
+          return "rainbow", slot9.text
+      end
+      return "unsupported", slot9.text
+  end
+
+  autoTotem.scanTarget = function(targetKind, forceRefresh)
+      local now = tick()
+      if forceRefresh or now >= nextEnvironment then
+          cachedEvents, cachedDescriptions = readEnvironment(now)
+          nextEnvironment = now + ENVIRONMENT_INTERVAL
+      end
+      if not targetKind then return false end
+      for _, value in ipairs(cachedEvents or {}) do
+          local title = tostring(value):match("^[^\n]+") or tostring(value)
+          local normalized = title:lower():gsub("[^%w]", "")
+          if (targetKind == "any" and (normalized == "auroraborealis"
+                  or normalized:find("rainbow", 1, true)))
+              or (targetKind == "luck" and normalized == "auroraborealis")
+              or (targetKind == "tropical" and normalized:find("tropicalsun", 1, true))
+              or (targetKind == "rainbow" and normalized:find("rainbow", 1, true)) then
+              return true
+          end
+      end
+      return false
+  end
+
+  autoTotem.macroReady = function(generation)
+      return alive and autoTotem.enabled
+          and not autoTotem.restartRequired
+          and (generation == nil or generation == autoTotem.generation)
+  end
+
+  autoTotem.resetAttemptTimer = function()
+      autoTotem.attemptStartedAt = nil
+  end
+
+  autoTotem.startAttemptTimer = function()
+      if not autoTotem.attemptStartedAt then
+          autoTotem.attemptStartedAt = tick()
+      end
+  end
+
+  autoTotem.tripFailsafe = function(generation)
+      if generation ~= nil and generation ~= autoTotem.generation then return false end
+      autoTotem.generation = autoTotem.generation + 1
+      autoTotem.enabled = false
+      autoTotem.busy = false
+      autoTotem.pending = false
+      autoTotem.startupCheckPending = false
+      autoTotem.startupConfirmed = false
+      autoTotem.restartRequired = true
+      autoTotem.nextScan = 0
+      autoTotem.resetAttemptTimer()
+      ensureAutoTotemDrawings()
+      autoTotem.toggleText.Text = "Auto Totem OFF"
+      autoTotem.toggleText.Color = C.instantOff
+      autoTotem.helpText.Text = "Re-enable, then restart macro"
+      autoTotem.setStatus("Failsafe - Auto Totem OFF; fishing resumed", C.red)
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      recoveryStage = 0
+      resetTracking()
+      equipPending = equippedRod() == nil
+      equipReadyAt = 0
+      nextCast = tick()
+      return true
+  end
+
+  autoTotem.checkFailsafe = function(generation)
+      if autoTotem.attemptStartedAt
+          and tick() - autoTotem.attemptStartedAt >= autoTotem.failsafeSeconds then
+          return autoTotem.tripFailsafe(generation)
+      end
+      return false
+  end
+
+  autoTotem.waitGuarded = function(seconds, generation)
+      local deadline = tick() + seconds
+      while tick() < deadline do
+          if not autoTotem.macroReady(generation) then return false, "stopped" end
+          if autoTotem.checkFailsafe(generation) then return false, "failsafe" end
+          task.wait(math.min(0.25, math.max(0, deadline - tick())))
+      end
+      if autoTotem.checkFailsafe(generation) then return false, "failsafe" end
+      return autoTotem.macroReady(generation), "done"
+  end
+
+  autoTotem.fishingCycleActive = function()
+      gui = player and player:FindFirstChild("PlayerGui") or gui
+      local reel = gui and gui:FindFirstChild("reel")
+      local bar = reel and reel:FindFirstChild("bar")
+      local fish = bar and bar:FindFirstChild("fish")
+      local playerbar = bar and bar:FindFirstChild("playerbar")
+      return (reel and bar and fish and playerbar)
+          or activeShakeButton() ~= nil
+          or held or releaseAt ~= nil
+  end
+
+  autoTotem.tapSlot = function(keyCode, generation)
+      if not autoTotem.macroReady(generation)
+          or autoTotem.checkFailsafe(generation) then return false end
+      keypress(keyCode)
+      task.wait(KEY_HOLD)
+      keyrelease(keyCode)
+      task.wait(0.30)
+      return autoTotem.macroReady(generation)
+          and not autoTotem.checkFailsafe(generation)
+  end
+
+  autoTotem.clickOnce = function(generation)
+      if not autoTotem.macroReady(generation)
+          or autoTotem.checkFailsafe(generation) then return false end
+      pcall(mouse1click)
+      task.wait(0.20)
+      return autoTotem.macroReady(generation)
+          and not autoTotem.checkFailsafe(generation)
+  end
+
+  autoTotem.finish = function(message, color, delay, generation, confirmed)
+      if generation ~= nil and generation ~= autoTotem.generation then return end
+      autoTotem.busy = false
+      autoTotem.pending = false
+      autoTotem.startupCheckPending = false
+      if confirmed then
+          autoTotem.startupConfirmed = true
+          autoTotem.resetAttemptTimer()
+      end
+      autoTotem.nextScan = tick() + (delay or autoTotem.scanInterval)
+      if not autoTotem.enabled then
+          autoTotem.setStatus("Waiting", C.muted)
+      else
+          if enabled then
+              equipPending = equippedRod() == nil
+              equipReadyAt = 0
+              nextCast = tick() + 0.40
+          end
+          autoTotem.setStatus(message, color)
+      end
+  end
+
+  autoTotem.run = function()
+      if autoTotem.busy or not autoTotem.enabled then return end
+      local targetKind, targetName
+      if autoTotem.luckEnabled then
+          targetKind, targetName = autoTotem.detectSlot9()
+      else
+          targetKind, targetName = "any", "Aurora/Rainbow"
+      end
+      autoTotem.targetKind, autoTotem.targetName = targetKind, targetName
+      if not targetKind or targetKind == "unsupported" then
+          autoTotem.pending = false
+          autoTotem.setStatus(
+              targetName and ("Unsupported 9th-slot totem: " .. targetName)
+                  or "Put a Luck, Tropical Sun, or Rainbow Totem in slot 9",
+              C.red)
+          return
+      end
+      if autoTotem.scanTarget(targetKind, true) then
+          autoTotem.pending = false
+          autoTotem.startupCheckPending = false
+          autoTotem.startupConfirmed = true
+          autoTotem.resetAttemptTimer()
+          autoTotem.nextScan = tick() + autoTotem.scanInterval
+          autoTotem.setStatus(targetName .. " is active", C.instantOn)
+          return
+      end
+      autoTotem.startAttemptTimer()
+      if autoTotem.checkFailsafe() then return end
+      autoTotem.busy = true
+      autoTotem.pending = false
+      local generation = autoTotem.generation
+      mouse(false)
+      releaseKey()
+      setNavigation(false)
+      releaseAt, idleSince = nil, nil
+      recoveryStage = 0
+      resetTracking()
+      task.wait(0.15)
+      if not autoTotem.macroReady(generation) then
+          autoTotem.finish("Stopped", C.muted, nil, generation)
+          return
+      end
+      if not autoTotem.luckEnabled then
+          -- Sundial-only mode: never equip or click the luck totem in slot 9.
+          -- Check before every Sundial so an already-active event is left
+          -- alone, and keep fishing normally until that event ends.
+          for _ = 1, 5 do
+              if autoTotem.scanTarget(targetKind, true) then
+                  autoTotem.finish(targetName .. " is active - fishing resumed",
+                      C.instantOn, nil, generation, true)
+                  return
+              end
+              autoTotem.setStatus("Sundial mode - using Sundial Totem...", C.yellow)
+              if not autoTotem.tapSlot(0x38, generation)
+                  or not autoTotem.clickOnce(generation) then
+                  autoTotem.finish("Stopped", C.muted, nil, generation)
+                  return
+              end
+              local waited, reason = autoTotem.waitGuarded(10, generation)
+              if not waited then
+                  if reason ~= "failsafe" then
+                      autoTotem.finish("Stopped", C.muted, nil, generation)
+                  end
+                  return
+              end
+          end
+          autoTotem.finish(targetName .. " not detected - Sundial retrying",
+              C.yellow, 1, generation)
+          return
+      end
+      local clock, isDaytime = serverClock()
+      if clock == "?" then
+          autoTotem.finish("Server time unavailable - retrying in 60s", C.red, nil, generation)
+          return
+      end
+      local needsDaytime = targetKind == "tropical" or targetKind == "rainbow"
+      if isDaytime ~= needsDaytime then
+          autoTotem.setStatus(
+              (needsDaytime and "Nighttime" or "Daytime")
+                  .. " - using Sundial Totem...", C.yellow)
+          if not autoTotem.tapSlot(0x38, generation) -- 8th hotbar slot: Sundial Totem
+              or not autoTotem.clickOnce(generation) then
+              autoTotem.finish("Stopped", C.muted, nil, generation)
+              return
+          end
+          autoTotem.setStatus(
+              "Waiting 10s for " .. (needsDaytime and "daytime" or "nighttime") .. "...",
+              C.cyan)
+          local waited, reason = autoTotem.waitGuarded(10, generation)
+          if not waited then
+              if reason ~= "failsafe" then autoTotem.finish("Stopped", C.muted, nil, generation) end
+              return
+          end
+          local clock, stillDaytime = serverClock()
+          if clock == "?" then
+              autoTotem.finish("Server time unavailable - retrying in 60s", C.red, nil, generation)
+              return
+          end
+          if stillDaytime ~= needsDaytime then
+              autoTotem.finish(
+                  "Time did not change to " .. (needsDaytime and "day" or "night")
+                      .. " - retrying in 60s", C.red, nil, generation)
+              return
+          end
+          if autoTotem.scanTarget(targetKind, true) then
+              autoTotem.finish(targetName .. " appeared after Sundial - fishing resumed",
+                  C.instantOn, nil, generation, true)
+              return
+          end
+      end
+      autoTotem.setStatus("Using " .. targetName .. "...", C.yellow)
+      if not autoTotem.tapSlot(0x39, generation) -- 9th hotbar slot: selected luck totem
+          or not autoTotem.clickOnce(generation) then
+          autoTotem.finish("Stopped", C.muted, nil, generation)
+          return
+      end
+      autoTotem.setStatus("Confirming " .. targetName .. "...", C.cyan)
+      local waited, reason = autoTotem.waitGuarded(5, generation)
+      if not waited then
+          if reason ~= "failsafe" then autoTotem.finish("Stopped", C.muted, nil, generation) end
+          return
+      end
+      if autoTotem.scanTarget(targetKind, true) then
+          autoTotem.finish(targetName .. " confirmed - fishing resumed",
+              C.instantOn, nil, generation, true)
+          return
+      end
+      autoTotem.setStatus("Not detected - clicking " .. targetName .. " again...", C.yellow)
+      if not autoTotem.clickOnce(generation) then
+          autoTotem.finish("Stopped", C.muted, nil, generation)
+          return
+      end
+      local retry, retryReason = autoTotem.waitGuarded(5, generation)
+      if not retry then
+          if retryReason ~= "failsafe" then autoTotem.finish("Stopped", C.muted, nil, generation) end
+          return
+      end
+      if autoTotem.scanTarget(targetKind, true) then
+          autoTotem.finish(targetName .. " confirmed - fishing resumed",
+              C.instantOn, nil, generation, true)
+      else
+          autoTotem.finish(targetName .. " not detected - retrying in 60s",
+              C.red, nil, generation)
+      end
+  end
+
+  autoTotem.poll = function()
+      if not autoTotem.enabled or autoTotem.restartRequired
+          or autoTotem.busy or not isrbxactive() or panelInputCaptured then return end
+      local now = tick()
+      if autoTotem.startupCheckPending or now >= autoTotem.nextScan then
+          local detectedKind, detectedName
+          if autoTotem.luckEnabled then
+              detectedKind, detectedName = autoTotem.detectSlot9()
+          else
+              detectedKind, detectedName = "any", "Aurora/Rainbow"
+          end
+          autoTotem.targetKind, autoTotem.targetName = detectedKind, detectedName
+          if not detectedKind or detectedKind == "unsupported" then
+              autoTotem.pending = false
+              autoTotem.startupCheckPending = false
+              autoTotem.setStatus(
+                  detectedName and ("Unsupported 9th-slot totem: " .. detectedName)
+                      or "Put a Luck, Tropical Sun, or Rainbow Totem in slot 9",
+                  C.red)
+              return
+          end
+          local targetActive = autoTotem.scanTarget(detectedKind, true)
+          autoTotem.nextScan = now + autoTotem.scanInterval
+          if targetActive then
+              autoTotem.pending = false
+              autoTotem.startupCheckPending = false
+              autoTotem.startupConfirmed = true
+              autoTotem.resetAttemptTimer()
+              autoTotem.setStatus(detectedName .. " is active - fishing ready", C.instantOn)
+              return
+          end
+          autoTotem.pending = true
+          autoTotem.setStatus(
+              autoTotem.startupConfirmed and (detectedName .. " missing - waiting for safe break...")
+                  or ("No " .. detectedName .. " - preparing totems before fishing..."), C.yellow)
+      end
+      if autoTotem.pending and (not autoTotem.startupConfirmed
+          or autoTotem.startupCheckPending or not autoTotem.fishingCycleActive()) then
+          autoTotem.run()
+      end
+  end
+
+  autoTotem.toggle = function()
+      local wasEnabled = autoTotem.enabled
+      autoTotem.enabled = not autoTotem.enabled
+      autoTotem.generation = autoTotem.generation + 1
+      ensureAutoTotemDrawings()
+      autoTotem.toggleText.Text = autoTotem.enabled and "Auto Totem ON" or "Auto Totem OFF"
+      autoTotem.toggleText.Color = autoTotem.enabled and C.instantOn or C.instantOff
+      if autoTotem.enabled then
+          local detectedKind, detectedName
+          if autoTotem.luckEnabled then
+              detectedKind, detectedName = autoTotem.detectSlot9()
+          else
+              detectedKind, detectedName = "any", "Aurora/Rainbow"
+          end
+          autoTotem.targetKind, autoTotem.targetName = detectedKind, detectedName
+          autoTotem.pending = false
+          autoTotem.busy = false
+          autoTotem.startupConfirmed = false
+          autoTotem.startupCheckPending = false
+          autoTotem.nextScan = 0
+          autoTotem.resetAttemptTimer()
+          if autoTotem.restartRequired then
+              autoTotem.helpText.Text = "Restart macro to re-arm Auto Totem"
+              autoTotem.setStatus("Re-enabled - restart macro", C.yellow)
+          elseif enabled then
+              autoTotem.helpText.Text = "Click to enable / disable"
+              autoTotem.startupCheckPending = true
+              autoTotem.setStatus(
+                  detectedName and ("Checking " .. detectedName .. " in slot 9...")
+                      or "Checking 9th hotbar slot...", C.cyan)
+          else
+              autoTotem.helpText.Text = "Click or ' to enable / disable"
+              autoTotem.startupCheckPending = true
+              autoTotem.setStatus("Checking selected totem...", C.cyan)
+          end
+      else
+          autoTotem.pending = false
+          autoTotem.startupCheckPending = false
+          autoTotem.startupConfirmed = false
+          autoTotem.busy = false
+          autoTotem.resetAttemptTimer()
+          autoTotem.helpText.Text = autoTotem.restartRequired
+              and "Re-enable, then restart macro" or "Click to enable / disable"
+          autoTotem.setStatus(autoTotem.restartRequired and wasEnabled
+              and "Failsafe lock - manual re-enable needed" or "Waiting",
+              autoTotem.restartRequired and wasEnabled and C.red or C.muted)
+      end
+  end
+  autoTotem.toggleLuck = function()
+      autoTotem.luckEnabled = not autoTotem.luckEnabled
+      if autoTotem.luckToggleText then
+          autoTotem.luckToggleText.Text = autoTotem.luckEnabled
+              and "Luck Totems ON" or "Luck Totems OFF"
+          autoTotem.luckToggleText.Color = autoTotem.luckEnabled
+              and C.instantOn or C.instantOff
+      end
+      autoTotem.generation = autoTotem.generation + 1
+      autoTotem.busy = false
+      autoTotem.pending = autoTotem.enabled
+      autoTotem.startupCheckPending = autoTotem.enabled
+      autoTotem.startupConfirmed = false
+      autoTotem.nextScan = 0
+      autoTotem.resetAttemptTimer()
+      if autoTotem.enabled then
+          autoTotem.setStatus(
+              autoTotem.luckEnabled
+                  and "Luck Totems enabled - checking event"
+                  or "Luck Totems disabled - Sundial mode",
+              C.cyan)
+      end
+  end
+
+  disableInstant = function()
       instantGeneration = instantGeneration + 1
       instantEnabled, instantLoading = false, false
       if instantCache then
@@ -2576,6 +3310,7 @@
       setNavigation(false)
       releaseAt, idleSince = nil, nil
       recoveryStage = 0
+      lastReequipAt, nextEquipAttemptAt = 0, 0
       nextCast = tick()
       wasReeling = false
       resetTracking()
@@ -2583,6 +3318,29 @@
           started, elapsed = tick(), 0
           catchBase = catches()
           sessionCaught = catchBase and 0 or nil
+          if autoTotem.enabled then
+              autoTotem.generation = autoTotem.generation + 1
+              autoTotem.busy = false
+              autoTotem.pending = false
+              autoTotem.startupConfirmed = false
+              autoTotem.startupCheckPending = true
+              autoTotem.nextScan = 0
+              autoTotem.resetAttemptTimer()
+              if autoTotem.restartRequired then
+                  autoTotem.restartRequired = false
+                  autoTotem.helpText.Text = "Click to enable / disable"
+              end
+              autoTotem.setStatus("Checking selected totem before fishing...", C.cyan)
+          end
+      elseif autoTotem.enabled then
+          autoTotem.generation = autoTotem.generation + 1
+          autoTotem.busy = false
+          autoTotem.pending = true
+          autoTotem.startupCheckPending = true
+          autoTotem.startupConfirmed = false
+          autoTotem.nextScan = 0
+          autoTotem.resetAttemptTimer()
+          autoTotem.setStatus("Auto Totem running independently", C.cyan)
       end
       nextStats = 0
       nextEnvironment = 0
@@ -2596,7 +3354,7 @@
       harpoonPullText.Text = harpoonPullEnabled and "Harpoon Pull ON" or "Harpoon Pull OFF"
       harpoonPullText.Color = harpoonPullEnabled and C.instantOn or C.instantOff
   end
-  local function requestHarpoonToggle()
+  requestHarpoonToggle = function()
       local now = tick()
       if now - harpoonToggleLast < 0.20 then return end
       harpoonToggleLast = now
@@ -2609,7 +3367,346 @@
           end
       end))
   end)
-  local function updateInstant(now, focused)
+  -- Matcha allows at most 200 live top-level locals. Keep the final handlers
+  -- in one namespaced table so they do not consume additional local registers.
+  macroCallbacks = macroCallbacks or {}
+  macroCallbacks.stellarwaveImage = function(node)
+      local ok, value = pcall(function() return node.Image end)
+      if ok and type(value) == "string" and value ~= "" then return value end
+      return nil
+  end
+  macroCallbacks.stellarwaveSymbol = function(node)
+      local nodeName = tostring(node.Name):lower()
+      if nodeName:match("^sign%d+$") then
+          return "slot:" .. nodeName
+      end
+      local preferred
+      for _, child in ipairs(node:GetDescendants()) do
+          local name = tostring(child.Name):lower()
+          if name == "basesign" or (name == "sign" and child.ClassName == "ImageLabel") then
+              preferred = macroCallbacks.stellarwaveImage(child)
+              if preferred then break end
+          end
+      end
+      local image = preferred or macroCallbacks.stellarwaveImage(node)
+      if image then return "image:" .. image end
+      local name = nodeName:gsub("%s+", "")
+      if name ~= "" and name ~= "sign" and name ~= "sign2" and name ~= "star"
+          and name ~= "fill" and name ~= "glow" then
+          return "name:" .. name
+      end
+      return nil
+  end
+  macroCallbacks.stellarwaveVisible = function(node)
+      local current = node
+      while current do
+          local ok, visible = pcall(function() return current.Visible end)
+          if ok and visible == false then return false end
+          local enabledOk, enabledValue = pcall(function() return current.Enabled end)
+          if enabledOk and enabledValue == false then return false end
+          current = current.Parent
+      end
+      return true
+  end
+  macroCallbacks.stellarwaveFindRoot = function()
+      local currentGui = player:FindFirstChildOfClass("PlayerGui")
+      if not currentGui then return nil end
+      for _, candidateName in ipairs({
+          "StarRiddles", "stellarwave", "Stellarwave", "StellarwaveMelody",
+          "StellarwaveMelody_ZodiacWheel", "ZodiacWheel", "zodiacWheel",
+      }) do
+          local candidate = currentGui:FindFirstChild(candidateName)
+          if candidate then return candidate end
+      end
+      for _, item in ipairs(currentGui:GetDescendants()) do
+          local itemName = tostring(item.Name):lower()
+          if itemName == "wheel" then
+              local candidate = item
+              while candidate.Parent and candidate.Parent ~= currentGui do
+                  candidate = candidate.Parent
+              end
+              return candidate
+          end
+      end
+      for _, item in ipairs(currentGui:GetDescendants()) do
+          local name = tostring(item.Name):lower()
+          if name == "signbar" or name == "signcontainer" then
+              local candidate = item
+              while candidate.Parent and candidate.Parent ~= currentGui do
+                  candidate = candidate.Parent
+              end
+              return candidate
+          end
+      end
+      return nil
+  end
+  macroCallbacks.stellarwaveClick = function(button)
+      local ok, clicked = pcall(function()
+          -- StarRiddles uses twelve full-size sign Frames.  Their Frame
+          -- centers all overlap at the wheel center, so click the rendered
+          -- symbol child instead of the container.
+          local target = button
+          local preferred
+          for _, child in ipairs(button:GetChildren()) do
+              local childName = tostring(child.Name):lower()
+              if childName == "basesign" or childName == "glowsign" then
+                  preferred = child
+                  if childName == "basesign" then break end
+              end
+          end
+          if preferred then target = preferred end
+          local position, size = target.AbsolutePosition, target.AbsoluteSize
+          if not position or not size or size.X <= 8 or size.Y <= 8 then return false end
+          local x, y = position.X + size.X / 2, position.Y + size.Y / 2
+          moveMouseFast(x, y)
+          if type(mouse1click) == "function" then
+              mouse1click()
+          else
+              VirtualInputManager:SendMouseButtonEvent(x, y, 0, true, player, 0)
+              VirtualInputManager:SendMouseButtonEvent(x, y, 0, false, player, 0)
+          end
+          return true
+      end)
+      return ok and clicked == true
+  end
+  macroCallbacks.stellarwaveDone = function(node)
+      -- A completed riddle has a thin horizontal fill/progress bar below
+      -- its symbol.  Do not use Visible/Color here: those properties are not
+      -- exposed consistently by Matcha, while the absolute geometry is.
+      local ok, nodePosition = pcall(function() return node.AbsolutePosition end)
+      local sizeOk, nodeSize = pcall(function() return node.AbsoluteSize end)
+      if not ok or not sizeOk or not nodePosition or not nodeSize then return false end
+      local nodeBottom = nodePosition.Y + nodeSize.Y
+      for _, child in ipairs(node:GetDescendants()) do
+          local childName = tostring(child.Name):lower()
+          local namedBar = childName:find("bar", 1, true)
+              or childName:find("progress", 1, true)
+              or childName:find("complete", 1, true)
+              or childName:find("done", 1, true)
+          local childOk, childPosition = pcall(function() return child.AbsolutePosition end)
+          local childSizeOk, childSize = pcall(function() return child.AbsoluteSize end)
+          if childOk and childSizeOk and childPosition and childSize
+              and childSize.X > childSize.Y * 2
+              and childPosition.Y >= nodeBottom - 8 then
+              -- Names are useful when available, but the live UI can use a
+              -- generic Frame/ImageLabel.  A thin, wide child directly below
+              -- the symbol is the visual completion bar in either case.
+              local geometricBar = childSize.X >= math.max(12, nodeSize.X * 0.72)
+              if namedBar or geometricBar then
+                  local filled = childSize.X >= math.max(12, nodeSize.X * 0.72)
+                  if filled or childName:find("complete", 1, true)
+                      or childName:find("done", 1, true) then
+                      return true
+                  end
+              end
+          end
+      end
+      return false
+  end
+  macroCallbacks.stellarwaveSequenceKey = function(node)
+      local function keyFor(candidate)
+          local name = tostring(candidate.Name):lower()
+          local number = name:match("^sign(%d+)$") or name:match("^symbol(%d+)$")
+              or name:match("^icon(%d+)$")
+          if number then return "slot:sign" .. number end
+          if name:match("^%d+$") then return "slot:sign" .. name end
+          local image = macroCallbacks.stellarwaveImage(candidate)
+          if image then return "image:" .. image end
+          local value
+          pcall(function() value = candidate.Value end)
+          if type(value) == "string" and value ~= "" then
+              local valueNumber = value:lower():match("sign(%d+)")
+              if valueNumber then return "slot:sign" .. valueNumber end
+              if value:match("^%d+$") then return "slot:sign" .. value end
+              if value:find("rbxasset", 1, true) or value:find("http", 1, true) then
+                  return "image:" .. value
+              end
+          end
+          local text
+          pcall(function() text = candidate.Text end)
+          if type(text) == "string" and text ~= "" then
+              local textNumber = text:lower():match("sign(%d+)")
+              if textNumber then return "slot:sign" .. textNumber end
+          end
+          return nil
+      end
+      local ownKey = keyFor(node)
+      if ownKey then return ownKey end
+      local preferredNames = {
+          basesign = true, sign = true, symbol = true, icon = true,
+          image = true, imagelabel = true, imagebutton = true, texture = true,
+      }
+      local candidates = {}
+      for _, child in ipairs(node:GetChildren()) do candidates[#candidates + 1] = child end
+      for _, child in ipairs(node:GetDescendants()) do candidates[#candidates + 1] = child end
+      for _, child in ipairs(candidates) do
+          local name = tostring(child.Name):lower()
+          if preferredNames[name] then
+              local key = keyFor(child)
+              if key then return key end
+          end
+      end
+      for _, child in ipairs(candidates) do
+          local key = keyFor(child)
+          if key then return key end
+      end
+      return nil
+  end
+  macroCallbacks.stellarwaveSequence = function(root)
+      local source = root:FindFirstChild("riddles")
+          or root:FindFirstChild("signbar")
+      local sequence = {}
+      if not source then return sequence end
+      -- Each direct child is one ordered riddle slot.  Resolve one symbol
+      -- from that child, rather than appending every descendant ImageLabel;
+      -- otherwise the progress bar itself can become a false symbol.
+      for _, item in ipairs(source:GetChildren()) do
+          if not macroCallbacks.stellarwaveDone(item) then
+              local key = macroCallbacks.stellarwaveSequenceKey(item)
+              if key and (key:sub(1, 5) == "slot:" or key:sub(1, 6) == "image:") then
+                  sequence[#sequence + 1] = key
+              end
+          end
+      end
+      return sequence
+  end
+  macroCallbacks.stellarwave = function(now, focused)
+      local state = stellarwaveState
+      if not focused then
+          state.root = nil
+          state.wheel = nil
+          state.buttons = {}
+          state.sequence = {}
+          state.sequenceKey = ""
+          state.sequenceLocked = false
+          state.completedSequenceKey = ""
+          state.nextIndex = 1
+          state.lastActiveKey = nil
+          return false
+      end
+      if now - state.lastRootScan >= 0.45 then
+          state.lastRootScan = now
+          local root = macroCallbacks.stellarwaveFindRoot()
+          if root ~= state.root then
+              state.root = root
+              state.wheel = root and root:FindFirstChild("wheel") or nil
+              state.buttons = {}
+              state.sequence = {}
+              state.sequenceKey = ""
+              state.sequenceLocked = false
+              state.completedSequenceKey = ""
+              state.nextIndex = 1
+              state.nextClickAt = 0
+              state.lastActiveKey = nil
+          end
+      end
+      local root = state.root
+      if not root or not macroCallbacks.stellarwaveVisible(root) then return false end
+      if now - state.lastButtonScan >= 0.10 then
+          state.lastButtonScan = now
+          local buttons = {}
+          local wheel = state.wheel or root:FindFirstChild("wheel") or root
+          state.wheel = wheel
+          for _, object in ipairs(wheel:GetChildren()) do
+              local class = object.ClassName
+              local objectName = tostring(object.Name):lower()
+              if (class == "TextButton" or class == "ImageButton"
+                  or (class == "Frame" and objectName:match("^sign%d+$")))
+                  and not objectName:find("close", 1, true)
+                  and not objectName:find("cancel", 1, true)
+                  and not objectName:find("modal", 1, true) then
+                  local key = macroCallbacks.stellarwaveSymbol(object)
+                  local imageKey
+                  local imageCandidates = {}
+                  for _, child in ipairs(object:GetChildren()) do imageCandidates[#imageCandidates + 1] = child end
+                  for _, child in ipairs(object:GetDescendants()) do imageCandidates[#imageCandidates + 1] = child end
+                  for _, child in ipairs(imageCandidates) do
+                      local childName = tostring(child.Name):lower()
+                      if childName == "basesign" or childName == "glowsign"
+                          or childName == "sign" or childName == "symbol" then
+                          local image = macroCallbacks.stellarwaveImage(child)
+                          if image then imageKey = "image:" .. image end
+                          if imageKey then break end
+                      end
+                  end
+                  local ok, size = pcall(function() return object.AbsoluteSize end)
+                  if key and ok and size and size.X > 8 and size.Y > 8 then
+                      buttons[#buttons + 1] = {
+                          object = object,
+                          key = key,
+                          imageKey = imageKey,
+                      }
+                  end
+              end
+          end
+          table.sort(buttons, function(left, right)
+              local leftNumber = tonumber(tostring(left.object.Name):match("(%d+)$")) or 0
+              local rightNumber = tonumber(tostring(right.object.Name):match("(%d+)$")) or 0
+              return leftNumber < rightNumber
+          end)
+          state.buttons = buttons
+      end
+      -- A stale/hidden StarRiddles container must not pause fishing.  Only
+      -- claim the macro when the wheel actually has clickable sign targets.
+      if #state.buttons == 0 then return false end
+      if now < state.nextClickAt then return true end
+
+      local sequence = macroCallbacks.stellarwaveSequence(root)
+      local scannedSignature = table.concat(sequence, "|")
+      if #sequence == 0 and state.sequenceLocked then
+          -- All ordered entries have their completion bar, or the riddle
+          -- container was cleared after the last click.  Drop stale state so
+          -- the next fishing minigame can be scanned from the beginning.
+          state.sequence = {}
+          state.sequenceKey = ""
+          state.sequenceLocked = false
+          state.nextIndex = 1
+          state.lastActiveKey = nil
+          state.nextClickAt = now + 0.20
+          display("STELLARWAVE COMPLETE")
+          return true
+      end
+      if #sequence > 0 and not state.sequenceLocked
+          and scannedSignature ~= state.completedSequenceKey then
+          state.sequenceKey = scannedSignature
+          state.sequence = sequence
+          state.sequenceLocked = true
+          state.nextIndex = 1
+          state.lastActiveKey = nil
+      end
+      if state.sequenceLocked and #state.sequence > 0 then
+          if state.nextIndex > #state.sequence then
+              state.nextClickAt = now + 0.45
+              state.completedSequenceKey = state.sequenceKey
+              state.sequence = {}
+              state.sequenceKey = ""
+              state.sequenceLocked = false
+              state.nextIndex = 1
+              display("STELLARWAVE COMPLETE")
+              return true
+          end
+          local targetKey = state.sequence[state.nextIndex]
+          local target
+          for _, entry in ipairs(state.buttons) do
+              if entry.key == targetKey or entry.imageKey == targetKey then
+                  target = entry.object
+                  break
+              end
+          end
+          if target and macroCallbacks.stellarwaveClick(target) then
+              state.nextIndex = state.nextIndex + 1
+              state.nextClickAt = now + state.clickGap
+              display(string.format("STELLARWAVE %d/%d", state.nextIndex - 1, #state.sequence))
+          end
+          return true
+      end
+
+      -- Never guess by cycling the wheel.  Until an ordered sequence is
+      -- present, keep the cursor still and wait for the live sequence scan.
+      display("STELLARWAVE SCANNING")
+      return true
+  end
+  macroCallbacks.updateInstant = function(now, focused)
       if not instantEnabled or not focused or now < nextInstant then return end
       nextInstant = now + 0.05
       local currentGui = player:FindFirstChild("PlayerGui")
@@ -2625,9 +3722,15 @@
           end
       end
   end
-  local function stop()
+  macroCallbacks.stop = function()
       if not alive then return end
       alive, enabled = false, false
+      autoTotem.enabled = false
+      autoTotem.busy = false
+      autoTotem.pending = false
+      autoTotem.startupCheckPending = false
+      autoTotem.startupConfirmed = false
+      autoTotem.generation = autoTotem.generation + 1
       disableInstant()
       rodSpeed.stop()
       equipPending = false
@@ -2662,13 +3765,13 @@
       fishEsp.clearDrawings()
       _G.StopFischMacro = nil
   end
-  _G.StopFischMacro = stop
+  _G.StopFischMacro = macroCallbacks.stop
   pcall(function()
       table.insert(inputConnections, player.AncestryChanged:Connect(function(_, parent)
-          if not parent then stop() end
+          if not parent then macroCallbacks.stop() end
       end))
   end)
-  local function edge(key)
+  macroCallbacks.edge = function(key)
       local value = iskeypressed(key)
       local current = value == true
           or (type(value) == "number" and value ~= 0)
@@ -2676,7 +3779,7 @@
       previous[key] = current
       return pressed
   end
-  local function track(bar, fish, playerbar, now)
+  macroCallbacks.track = function(bar, fish, playerbar, now)
       local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
       local fp, fs = fish.AbsolutePosition, fish.AbsoluteSize
       local bp, bs = playerbar.AbsolutePosition, playerbar.AbsoluteSize
@@ -2781,24 +3884,36 @@
   previous[0xDB] = iskeypressed(0xDB) == true
   previous[0x1A] = iskeypressed(0x1A) == true
   previous[INSTANT_KEY] = iskeypressed(INSTANT_KEY) == true
-  shown = false
-  fadeAmount = 0
-  totemMenu.startupIntro.active = true
+  previous[AUTO_TOTEM_KEY] = iskeypressed(AUTO_TOTEM_KEY) == true
+  shown = true
+  fadeAmount = 1
+  totemMenu.startupIntro.active = false
   totemMenu.startupIntro.started = tick()
   totemMenu.startupIntro.amount = 0
   fadeLastTime = tick()
   updateFade(fadeLastTime)
   task.spawn(function()
+      while alive do
+          if autoTotem.enabled then
+              autoTotem.poll()
+              task.wait(0.20)
+          else
+              task.wait(0.75)
+          end
+      end
+  end)
+  task.spawn(function()
       local ok, err = pcall(function()
           while alive do
               local now = tick()
-              local macroPrimary = edge(MACRO_KEY)
-              local macroScan = edge(0x9D)
+              local macroPrimary = macroCallbacks.edge(MACRO_KEY)
+              local macroScan = macroCallbacks.edge(0x9D)
               local toggle = macroPrimary or macroScan -- Right Ctrl
-              local instantToggle = edge(INSTANT_KEY) -- Right Alt
-              local hide = edge(0xDD) -- ]
-              local harpoonToggleVk = edge(0xDB) -- [ virtual key
-              local harpoonToggleScan = edge(0x1A) -- [ scan code
+              local instantToggle = macroCallbacks.edge(INSTANT_KEY) -- Right Alt
+              local autoTotemToggle = macroCallbacks.edge(AUTO_TOTEM_KEY) -- apostrophe
+              local hide = macroCallbacks.edge(0xDD) -- ]
+              local harpoonToggleVk = macroCallbacks.edge(0xDB) -- [ virtual key
+              local harpoonToggleScan = macroCallbacks.edge(0x1A) -- [ scan code
               local harpoonToggle = harpoonToggleVk or harpoonToggleScan
               local focused = isrbxactive()
               local typing = false
@@ -2817,17 +3932,33 @@
                   if hide then
                       shown = not shown
                   end
-                  if instantToggle then toggleInstant() end
+              if instantToggle then toggleInstant() end
+              if autoTotemToggle then autoTotem.toggle() end
                   if toggle then
                       toggleMacro()
                   end
               end
               if harpoonToggle and not typing then
                   requestHarpoonToggle()
-              end
-              updatePanelInput(focused)
-              updateInstant(now, focused)
-              if not enabled or not focused or panelInputCaptured then
+               end
+               updatePanelInput(focused)
+               macroCallbacks.updateInstant(now, focused)
+               local rodIsStellarwave = enabled and stellarwaveRodEquipped()
+               local reelMinigameActive = enabled and focused and not panelInputCaptured
+                   and fishingMinigameActive()
+               local canRunStellarwave = rodIsStellarwave and reelMinigameActive
+               local stellarwaveActive = canRunStellarwave
+                   and macroCallbacks.stellarwave(now, true) == true
+               if not canRunStellarwave then
+                   -- Drop listeners and reset symbol state as soon as the
+                   -- rod changes or the fishing minigame closes.
+                   macroCallbacks.stellarwave(now, false)
+               end
+               local autoTotemBlocking = autoTotem.busy
+                   or (autoTotem.enabled and not autoTotem.restartRequired
+                       and not autoTotem.startupConfirmed)
+               if not enabled or not focused or panelInputCaptured
+                   or autoTotemBlocking then
                   mouse(false)
                   releaseKey()
                   releaseAt, idleSince = nil, nil
@@ -2836,9 +3967,11 @@
                   if focused and not panelInputCaptured then
                       setNavigation(false)
                   end
-                  display(not enabled and "OFF"
-                      or panelInputCaptured and "PAUSED / PANEL"
-                      or "PAUSED / UNFOCUSED")
+                   display(not enabled and "OFF"
+                       or autoTotem.busy and "AUTO TOTEM"
+                       or autoTotemBlocking and "WAITING FOR AURORA"
+                       or panelInputCaptured and "PAUSED / PANEL"
+                       or "PAUSED / UNFOCUSED")
               else
                   local reel = gui and gui:FindFirstChild("reel")
                   local bar = reel and reel:FindFirstChild("bar")
@@ -2846,23 +3979,41 @@
                   local playerbar = bar and bar:FindFirstChild("playerbar")
                   local button = harpoonPullEnabled and activeHarpoonPullButton()
                       or (enabled and activeShakeButton())
-                  local reelActive = reel and bar and fish and playerbar
+                  local reelActive = reelMinigameActive
                   local shakeActive = button ~= nil and not reelActive
-                  if equipPending and equippedRod() then
-                      equipPending = false
-                      equipReadyAt = 0
-                  end
-                  if equipPending then
+                   if equipPending and equippedRod() then
+                       equipPending = false
+                       equipReadyAt = 0
+                       nextEquipAttemptAt = 0
+                   end
+                   if stellarwaveActive then
+                       mouse(false)
+                       releaseKey()
+                       setNavigation(false)
+                       releaseAt, idleSince = nil, nil
+                       recoveryStage = 0
+                       wasReeling = false
+                       resetTracking()
+                       display("STELLARWAVE")
+                   elseif equipPending then
                       mouse(false)
                       setNavigation(false)
                       display("EQUIPPING ROD")
                       if not navigationOn
                           and not navigationReleaseAt
                           and now >= navigationReadyAt
+                          and now >= nextEquipAttemptAt
                           and not pendingKey then
-                          if tap(0x54, now) then -- T
+                          if ensureFishingRod() then
                               equipPending = false
                               equipReadyAt = now + 0.40
+                              nextEquipAttemptAt = now + 0.75
+                              nextCast = equipReadyAt
+                              releaseAt = nil
+                              idleSince = nil
+                          elseif tap(0x54, now) then -- T fallback
+                              equipReadyAt = now + 0.40
+                              nextEquipAttemptAt = now + 0.75
                               nextCast = equipReadyAt
                               releaseAt = nil
                               idleSince = nil
@@ -2883,7 +4034,7 @@
                       wasReeling = true
                       releaseAt = nil
                       if fish and playerbar then
-                          local valid = track(bar, fish, playerbar, now)
+                          local valid = macroCallbacks.track(bar, fish, playerbar, now)
                           display(
                               not valid and "WAITING FOR REEL"
                               or fishMoving and "PREDICTING"
@@ -2942,51 +4093,83 @@
                               end
                           end
                       elseif releaseAt then
-                          local percent, inGreen = castReading()
                           if castMode == "Instant" and now - releaseAt >= INSTANT_HOLD then
                               mouse(false)
                               releaseAt = nil
                               nextCast = now + RETRY
                               display("INSTANT CAST")
-                          elseif castMode == "Perfect" and inGreen then
-                              mouse(false)
-                              releaseAt = nil
-                              nextCast = now + RETRY
-                              display(string.format("CAST %.0f%% / GREEN", percent))
+                          elseif castMode == "Perfect" then
+                              if now >= perfectCastNextUpdate then
+                                  perfectCastNextUpdate = now + PERFECT_CAST_UPDATE
+                                  perfectCastPercent, perfectCastInGreen = castReading()
+                              end
+                              if perfectCastInGreen then
+                                  mouse(false)
+                                  releaseAt = nil
+                                  nextCast = now + RETRY
+                                  display(string.format("CAST %.0f%% / GREEN", perfectCastPercent))
+                              elseif now - releaseAt >= CAST_TIMEOUT then
+                                  mouse(false)
+                                  releaseAt = nil
+                                  nextCast = now + RETRY
+                                  display("CAST METER UNAVAILABLE / RETRY")
+                              else
+                                  display(perfectCastPercent
+                                      and string.format("CAST %.0f%% / 100%%", perfectCastPercent)
+                                      or "WAITING FOR CAST METER")
+                              end
                           elseif now - releaseAt >= CAST_TIMEOUT then
                               mouse(false)
                               releaseAt = nil
                               nextCast = now + RETRY
                               display("CAST METER UNAVAILABLE / RETRY")
                           else
-                              display(castMode == "Instant" and "INSTANT CAST"
-                                  or percent and string.format("CAST %.0f%% / 100%%", percent)
-                                  or "WAITING FOR CAST METER")
+                              display("INSTANT CAST")
                           end
                       elseif dragging then
                           display("MOVING PANEL")
-                      elseif now >= nextCast and equippedRod() then
-                          castMeter, castFill, castGreen = nil, nil, nil
-                          mouse(true)
-                          releaseAt = now -- Start of charge; not a release deadline.
-                          display(castMode == "Instant" and "INSTANT CAST" or "CAST 0% / 100%")
+                      elseif now >= nextCast then
+                          if equippedRod() then
+                              castMeter, castFill, castGreen = nil, nil, nil
+                              perfectCastNextUpdate = now
+                              perfectCastPercent, perfectCastInGreen = nil, false
+                              mouse(true)
+                              releaseAt = now -- Start of charge; not a release deadline.
+                              display(castMode == "Instant" and "INSTANT CAST" or "CAST 0% / 100%")
+                          elseif ensureFishingRod() then
+                              equipPending = false
+                              equipReadyAt = now + 0.40
+                              nextEquipAttemptAt = now + 0.75
+                              nextCast = equipReadyAt
+                              releaseAt = nil
+                              idleSince = nil
+                              display("EQUIPPING ROD")
+                          else
+                              requestRodReequip(now)
+                          end
                       else
                           display("WAITING FOR BITE")
                       end
                   end
               end
-              if now >= nextStats then
+              if (enabled or autoTotem.enabled) and now >= nextStats then
                   refreshStats(now)
                   nextStats = now + 0.5
               end
               updateDropdownAnimation(now)
               totemMenu.updateStartupIntro(now)
               updateFade(now)
-              task.wait(0.016)
+              local activeWork = enabled or autoTotem.enabled or fishEsp.enabled
+                  or instantEnabled or rodSpeed.enabled or harpoonPullEnabled
+                  or dragging or teleportWindow.dragging
+              local uiAnimating = dragging or teleportWindow.dragging
+                  or npcMenuOpen or autoTotem.open or totemMenu.open
+                  or islandMenu.open or totemMenu.startupIntro.active
+              task.wait((activeWork or uiAnimating) and 0.016 or 0.05)
           end
       end)
       if not ok then
-          stop()
+          macroCallbacks.stop()
           warn("Fisch Macro stopped: " .. tostring(err))
       end
   end)
