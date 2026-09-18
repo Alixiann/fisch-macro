@@ -3,21 +3,24 @@
   if _G.StopFischMacro then _G.StopFischMacro() end
   if _G.StopFischInstantCatch then _G.StopFischInstantCatch() end
   if _G.FischCatch then _G.FischCatch.running = false end
-  local CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
-  local INSTANT_HOLD = 0.15 -- Short cast tap; clears Fisch's initial input delay.
-  local castMode = "Instant"
-  local RETRY = 2
-  local FAILSAFE = 20
-  local KEY_HOLD = 0.06
-  local FADE_SECONDS = 0.65
-  local ENVIRONMENT_INTERVAL = 1
-  local EVENT_SCROLL_SECONDS = 4
-  local Players = game:GetService("Players")
-  local RS = game:GetService("ReplicatedStorage")
-  local Lighting = game:GetService("Lighting")
-  local W = game:GetService("Workspace")
-  local VirtualInputManager = game:GetService("VirtualInputManager")
-  local UserInputService = game:GetService("UserInputService")
+  CAST_TIMEOUT = 6 -- Emergency release only; the meter decides the cast.
+  castMode = "Instant"
+  RETRY = 0.05
+  FAILSAFE = 20
+  KEY_HOLD = 0.06
+  FADE_SECONDS = 0.65
+  -- The text/countdown refresh remains once per second.  The expensive
+  -- replicated/world tree scan is cached for two seconds to keep the GUI
+  -- responsive while still detecting weather and events quickly.
+  ENVIRONMENT_INTERVAL = 2
+  EVENT_SCROLL_SECONDS = 4
+  Players = game:GetService("Players")
+  RS = game:GetService("ReplicatedStorage")
+  Lighting = game:GetService("Lighting")
+  W = game:GetService("Workspace")
+  VirtualInputManager = game:GetService("VirtualInputManager")
+  UserInputService = game:GetService("UserInputService")
+  ContextActionService = game:GetService("ContextActionService")
   local player = Players.LocalPlayer
   if not player then
       Players:GetPropertyChangedSignal("LocalPlayer"):Wait()
@@ -63,11 +66,11 @@
   local nextStats = 0
   local fadeAmount = 1
   local fadeLastTime = tick()
+  guiPaintAt = 0
   local borderPhase = 0
   local lastDisplay = ""
-  local cachedEvents, cachedDescriptions = {}, {}
+  local cachedEvents = {}
   eventDeadlines = {}
-  eventModifiers = {}
   eventStartTimes = {}
   eventDurations = {
       ["shiny surge"] = 900,
@@ -95,25 +98,6 @@
       ["dust storm"] = 900,
       ["torrential rain"] = 900,
       ["absolute darkness"] = 600,
-  }
-  eventFallbackModifiers = {
-      ["shiny surge"] = "+3% Shiny chance",
-      ["night of luminous"] = "+10% Sparkling chance",
-      ["night of the luminous"] = "+10% Sparkling chance",
-      ["day of luminous"] = "+10% Sparkling chance",
-      ["day of the luminous"] = "+10% Sparkling chance",
-      ["night of the fireflies"] = "2x Nocturnal catch rate",
-      ["mutation surge"] = "+15% Natural Mutation chance",
-      ["aurora borealis"] = "7x Luck",
-      ["sovereign surge"] = "2x Luck",
-      ["sovereign storm"] = "4x Luck",
-      ["sovereign reckoning"] = "8x Luck",
-      ["tropical sun"] = "9x Luck",
-      ["rainbow"] = "8x Luck | +5% Shiny | +5% Sparkling",
-      ["starfall"] = "+10% Progress Speed",
-      ["tornado"] = "+20% Lure Speed",
-      ["eclipse"] = "+4 Disturbance",
-      ["frost moon"] = "9x Luck",
   }
   weatherApi = nil
   weatherLibrary = nil
@@ -201,7 +185,6 @@
       slots = {},
       buttonCache = {shakeAt = 0, shake = nil, harpoonAt = 0, harpoon = nil}
   }
-  totemMenu.startupIntro = {active = false, started = tick(), amount = 0, drawings = {}}
   local islandMenu = {
       open = false,
       anim = 0,
@@ -240,7 +223,7 @@
   fishEsp = {
       box = nil, input = nil, toggle = nil, status = nil,
       text = "", editing = false, enabled = false, keys = {}, drawings = {},
-      targets = {}, queries = {}, queryReady = false, rareRequested = false,
+      targets = {}, queries = {}, queryReady = false,
   }
   rodSpeed = {
       box = nil, input = nil, toggle = nil, status = nil,
@@ -297,53 +280,7 @@
       d.Color = C.white
       return d
   end
-  totemMenu.startupIntro.title = Drawing.new("Text")
-  totemMenu.startupIntro.title.Text = "Fisch Matcha Macro"
-  totemMenu.startupIntro.title.Size = 26
-  totemMenu.startupIntro.title.Font = 4
-  totemMenu.startupIntro.title.Center = true
-  totemMenu.startupIntro.title.Outline = true
-  totemMenu.startupIntro.title.Color = C.pink
-  totemMenu.startupIntro.title.Visible = false
-  totemMenu.startupIntro.title.ZIndex = 1000
-  totemMenu.startupIntro.line = Drawing.new("Line")
-  totemMenu.startupIntro.line.Thickness = 2
-  totemMenu.startupIntro.line.Color = C.pink
-  totemMenu.startupIntro.line.Visible = false
-  totemMenu.startupIntro.line.ZIndex = 1000
-  totemMenu.startupIntro.byline = Drawing.new("Text")
-  totemMenu.startupIntro.byline.Text = "made by: 1a"
-  totemMenu.startupIntro.byline.Size = 12
-  totemMenu.startupIntro.byline.Font = 4
-  totemMenu.startupIntro.byline.Center = true
-  totemMenu.startupIntro.byline.Outline = true
-  totemMenu.startupIntro.byline.Color = C.muted
-  totemMenu.startupIntro.byline.Visible = false
-  totemMenu.startupIntro.byline.ZIndex = 1000
-  totemMenu.startupIntro.circle = Drawing.new("Circle")
-  totemMenu.startupIntro.circle.Radius = 190
-  totemMenu.startupIntro.circle.NumSides = 64
-  totemMenu.startupIntro.circle.Filled = true
-  totemMenu.startupIntro.circle.Color = C.white
-  totemMenu.startupIntro.circle.Transparency = 1
-  totemMenu.startupIntro.circle.Visible = false
-  totemMenu.startupIntro.circle.ZIndex = 999
-  totemMenu.startupIntro.circleOutline = Drawing.new("Circle")
-  totemMenu.startupIntro.circleOutline.Radius = 190
-  totemMenu.startupIntro.circleOutline.NumSides = 64
-  totemMenu.startupIntro.circleOutline.Filled = false
-  totemMenu.startupIntro.circleOutline.Thickness = 2
-  totemMenu.startupIntro.circleOutline.Color = C.pink
-  totemMenu.startupIntro.circleOutline.Transparency = 1
-  totemMenu.startupIntro.circleOutline.Visible = false
-  totemMenu.startupIntro.circleOutline.ZIndex = 1000
-  totemMenu.startupIntro.drawings = {
-      totemMenu.startupIntro.circle,
-      totemMenu.startupIntro.circleOutline,
-      totemMenu.startupIntro.title,
-      totemMenu.startupIntro.line,
-      totemMenu.startupIntro.byline,
-  }
+  -- Startup intro removed.  The main panel is shown immediately.
   local titleText = label("Fisch Macro", 12, 10, 18)
   titleText.Color = C.pink
   local resizeMinus = label("-", PANEL_W - 48, 12, 17)
@@ -393,7 +330,7 @@
   automationMenuDrawings[instantText] = true
   automationKeybindAlt = label("Keybind: R-Alt", automationBindX, 263, 8)
   automationMenuDrawings[automationKeybindAlt] = true
-  local castModeText = label("Instant cast", automationX, 317, 10)
+  local castModeText = label("Perfect cast OFF", automationX, 317, 10)
   castModeText.Color = C.instantOff
   automationMenuDrawings[castModeText] = true
   rodSpeed.heading = label("Rod speed", automationX, 339, 10)
@@ -427,7 +364,7 @@
   fishEsp.box.Size = Vector2.new(PANEL_W - 24, 22)
   fishEsp.box.Color = Color3.fromRGB(35, 42, 56)
   fishEsp.box.Filled = true
-  fishEsp.input = label("fish names; hunt names get full-map ESP", 18, 427, 9)
+  fishEsp.input = label("one roaming fish name", 18, 427, 9)
   fishEsp.input.Color = C.muted
   fishEsp.toggle = label("Fish ESP OFF", 12, 449, 10)
   fishEsp.toggle.Color = C.instantOff
@@ -630,8 +567,9 @@
       return false
   end
   local function objectPart(object)
-      if object:IsA("BasePart") then return object end
-      if object:IsA("Model") then
+      local class = object.ClassName
+      if class == "Part" or class == "MeshPart" or class == "UnionOperation" then return object end
+      if class == "Model" then
           return object.PrimaryPart or object:FindFirstChildWhichIsA("BasePart", true)
       end
   end
@@ -639,8 +577,8 @@
       for _, object in ipairs(W:GetDescendants()) do
           if hasNpcName(object.Name, row.aliases) then
               local model = object
-              if not model:IsA("Model") then model = object.Parent end
-              if model and model:IsA("Model") then
+              if model.ClassName ~= "Model" then model = object.Parent end
+              if model and model.ClassName == "Model" then
                   local part
                   if row.preferHead then
                       part = model:FindFirstChild("Head")
@@ -796,6 +734,14 @@
   local cursor = player:GetMouse()
   local panelInputCaptured = false
   local leftWasDown = false
+  guiDragCaptured = false
+  setGuiDragCapture = function(capture)
+      if guiDragCaptured == capture then return end
+      -- Matcha has no ContextActionService binding. Capture only a GUI drag,
+      -- and restore game input on release, hide, focus loss, or unload.
+      local ok = pcall(setrobloxinput, not capture)
+      guiDragCaptured = ok and capture or false
+  end
   local function activeShakeButton()
       local cache = totemMenu.buttonCache
       local now = tick()
@@ -953,7 +899,6 @@
   end)
   local function releasePanelInput()
       if panelInputCaptured then
-          setrobloxinput(true)
           panelInputCaptured = false
       end
   end
@@ -1002,7 +947,11 @@
               or entry.d == islandMenu.arrow
           local originX = isMenuEntry and dropdownX or x
           local originY = isMenuEntry and (dropdownY - 388 * uiScale) or y
-          entry.d.Position = Vector2.new(originX + entry.x * uiScale, originY + entry.y * uiScale)
+          local drawX, drawY = originX + entry.x * uiScale, originY + entry.y * uiScale
+          if entry.drawX ~= drawX or entry.drawY ~= drawY then
+              entry.d.Position = Vector2.new(drawX, drawY)
+              entry.drawX, entry.drawY = drawX, drawY
+          end
           if entry.baseSize == nil then
               local ok, size = pcall(function() return entry.d.Size end)
               if ok and size then
@@ -1013,15 +962,25 @@
                   end
               end
           end
-          if type(entry.baseSize) == "number" then
-              entry.d.Size = entry.baseSize * uiScale
-          elseif entry.baseSize then
-              entry.d.Size = entry.baseSize * uiScale
+          if entry.drawScale ~= uiScale or entry.drawBaseSize ~= entry.baseSize then
+              if type(entry.baseSize) == "number" then
+                  entry.d.Size = entry.baseSize * uiScale
+              elseif entry.baseSize then
+                  entry.d.Size = Vector2.new(entry.baseSize.X * uiScale, entry.baseSize.Y * uiScale)
+              end
+              entry.drawScale, entry.drawBaseSize = uiScale, entry.baseSize
           end
       end
       border.Size = Vector2.new(drawW, drawH)
   end
   local function updateDrag(focused)
+      if not focused or not shown then
+          dragging = false
+          teleportWindow.dragging = false
+          rightWasDown = false
+          setGuiDragCapture(false)
+          return
+      end
       local value = ismouse2pressed()
       local down = value == true or (type(value) == "number" and value ~= 0)
       local x, y = cursor.X, cursor.Y
@@ -1033,11 +992,12 @@
           and teleportWindow.x and teleportWindow.y
           and x >= teleportWindow.x and x <= teleportWindow.x + PANEL_W * uiScale
           and y >= teleportWindow.y and y <= teleportWindow.y + dropdownHeight
-      if inDropdown and down then
+      if (inDropdown or teleportWindow.dragging) and down then
           if not rightWasDown then
               teleportWindow.dragging = true
+              setGuiDragCapture(true)
               teleportWindow.offsetX, teleportWindow.offsetY = x - teleportWindow.x, y - teleportWindow.y
-              pcall(setrobloxinput, false)
+              -- Keep Roblox UI navigation enabled while moving the dropdown.
           end
           if teleportWindow.dragging then
               teleportWindow.x, teleportWindow.y = x - teleportWindow.offsetX, y - teleportWindow.offsetY
@@ -1047,18 +1007,14 @@
           return
       end
       if not down then teleportWindow.dragging = false end
-      if not focused or not shown or type(x) ~= "number" or type(y) ~= "number" then
+      if type(x) ~= "number" or type(y) ~= "number" then
           dragging = false
       elseif down then
-          if lastPanelX and lastPanelY
-              and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
-              and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
-              pcall(setrobloxinput, false)
-          end
           if not rightWasDown and lastPanelX and lastPanelY
               and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
               and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale then
               dragging = true
+              setGuiDragCapture(true)
               dragOffsetX, dragOffsetY = x - lastPanelX, y - lastPanelY
           end
           if dragging then
@@ -1068,9 +1024,15 @@
       else
           dragging = false
       end
+      if not dragging and not teleportWindow.dragging then
+          setGuiDragCapture(false)
+      end
       rightWasDown = down
   end
   local function updateFade(now)
+      if not shown and fadeAmount <= 0.001 then return end
+      if now - guiPaintAt < 1 / 60 then return end
+      guiPaintAt = now
       local dt = math.max(0, now - fadeLastTime)
       fadeLastTime = now
       borderPhase = (borderPhase + dt * 2.4) % (math.pi * 2)
@@ -1128,52 +1090,6 @@
           entry.d.Visible = fadeAmount > 0.001 and menuAlpha > 0.001
       end
   end
-  totemMenu.updateStartupIntro = function(now)
-      if not totemMenu.startupIntro.active then return end
-      local elapsed = now - totemMenu.startupIntro.started
-      local fadeIn = math.clamp(elapsed / 0.65, 0, 1)
-      local fadeOut = math.clamp((2.30 - elapsed) / 0.65, 0, 1)
-      totemMenu.startupIntro.amount = math.min(fadeIn, fadeOut)
-      local camera = W:FindFirstChildOfClass("Camera")
-      local viewport = camera and camera.ViewportSize
-      if viewport then
-          local centerX, centerY = viewport.X / 2, viewport.Y / 2
-          totemMenu.startupIntro.circle.Position = Vector2.new(centerX, centerY)
-          totemMenu.startupIntro.circleOutline.Position = Vector2.new(centerX, centerY)
-          totemMenu.startupIntro.title.Position = Vector2.new(centerX, centerY - 28)
-          totemMenu.startupIntro.line.From = Vector2.new(centerX - 118, centerY + 8)
-          totemMenu.startupIntro.line.To = Vector2.new(centerX + 118, centerY + 8)
-          totemMenu.startupIntro.byline.Position = Vector2.new(centerX, centerY + 17)
-      end
-      totemMenu.startupIntro.circle.Color = Color3.new(
-          1 + (C.bg.R - 1) * fadeIn,
-          1 + (C.bg.G - 1) * fadeIn,
-          1 + (C.bg.B - 1) * fadeIn
-      )
-      totemMenu.startupIntro.title.Color = Color3.new(
-          1 + (C.pink.R - 1) * fadeIn,
-          1 + (C.pink.G - 1) * fadeIn,
-          1 + (C.pink.B - 1) * fadeIn
-      )
-      totemMenu.startupIntro.byline.Color = Color3.new(
-          1 + (C.muted.R - 1) * fadeIn,
-          1 + (C.muted.G - 1) * fadeIn,
-          1 + (C.muted.B - 1) * fadeIn
-      )
-      for _, drawing in ipairs(totemMenu.startupIntro.drawings) do
-          drawing.Transparency = 1 - totemMenu.startupIntro.amount
-          drawing.Visible = true
-      end
-      if elapsed >= 3.30 then
-          totemMenu.startupIntro.active = false
-          shown = true
-          fadeAmount = 0
-          fadeLastTime = now
-          for _, drawing in ipairs(totemMenu.startupIntro.drawings) do
-              drawing.Visible = false
-          end
-      end
-  end
   local function display(message)
       local key = tostring(enabled) .. castMode .. message
       if lastDisplay == key then return end
@@ -1214,13 +1130,21 @@
           castFill = castMeter and castMeter:FindFirstChild("bar")
           castGreen = castMeter and castMeter:FindFirstChild("green")
       end
-      if not (castMeter and castFill and castGreen) then return nil end
+      if not (castMeter and castFill) then return nil end
+      local visible = true
+      pcall(function()
+          visible = castMeter.Visible ~= false and castFill.Visible ~= false
+      end)
+      if not visible then return nil end
       local size, origin = castMeter.AbsoluteSize, castMeter.AbsolutePosition
       local fillSize = castFill.AbsoluteSize
-      local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
-      if not (size and origin and fillSize and greenSize and greenPos)
-          or size.Y <= 0 or greenSize.Y <= 0 then return nil end
+      if not (size and origin and fillSize) or size.Y <= 0 then return nil end
       local amount = math.clamp(fillSize.Y / size.Y, 0, 1)
+      if not castGreen then return amount * 100, false end
+      local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
+      if not (greenSize and greenPos) or greenSize.Y <= 0 then
+          return amount * 100, false
+      end
       local lower = math.clamp(1 - (greenPos.Y + greenSize.Y - origin.Y) / size.Y, 0, 1)
       local upper = math.clamp(1 - (greenPos.Y - origin.Y) / size.Y, 0, 1)
       if upper <= lower then return nil end
@@ -1437,7 +1361,13 @@
       local totemTarget = totemMenu.open and 1 or 0
       local islandTarget = islandMenu.open and 1 or 0
       local autoTotemTarget = autoTotem.open and 1 or 0
-      local blend = 1 - math.exp(-dt * 24)
+      if math.abs(npcMenuAnim - npcTarget) < 0.0001
+          and math.abs(totemMenu.anim - totemTarget) < 0.0001
+          and math.abs(islandMenu.anim - islandTarget) < 0.0001
+          and math.abs(autoTotem.anim - autoTotemTarget) < 0.0001 then
+          return
+      end
+      local blend = math.min(1, dt * 18)
       npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
       totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
       islandMenu.anim = islandMenu.anim + (islandTarget - islandMenu.anim) * blend
@@ -1472,7 +1402,7 @@
               if npcName(object.Name) == targetName then
                   local node, heldTool = object, false
                   while node and node ~= W do
-                      if node:IsA("Tool") then heldTool = true; break end
+                      if node.ClassName == "Tool" then heldTool = true; break end
                       node = node.Parent
                   end
                   if not heldTool then
@@ -1565,43 +1495,6 @@
   fishEsp.normalize = function(value)
       return tostring(value or ""):lower():gsub("[^%w]", "")
   end
-  fishEsp.isHuntName = function(value)
-      local name = fishEsp.normalize(value)
-      for _, pattern in ipairs({
-          "megalodon", "seiwhale", "isonade", "colossalsquid",
-          "mosasaurus", "nessie", "leviathan", "kraken", "whaleshark",
-          "scylla", "colossaldragon", "frostwyrm", "tidefall", "patshark",
-      }) do
-          if name:find(pattern, 1, true) then return true end
-      end
-      return false
-  end
-  fishEsp.huntRoots = function()
-      local roots, seen = {}, {}
-      local function add(root)
-          if root and not seen[root] then
-              seen[root] = true
-              roots[#roots + 1] = root
-          end
-      end
-      local active = W:FindFirstChild("active")
-      add(active and active:FindFirstChild("FinalAbundanceSpawns"))
-      add(W:FindFirstChild("DreadfinHuntPools"))
-      local hades = W:FindFirstChild("HadesStuff")
-      add(hades and hades:FindFirstChild("Hunt"))
-      -- Some hunt fish are replicated through the regular fish hierarchy
-      -- when they are close enough to stream in.  This is an exact hunt-name
-      -- fallback only; normal roaming fish are never accepted as targets.
-      add(active and active:FindFirstChild("roamingFish"))
-      for _, root in ipairs(W:GetDescendants()) do
-          local name = root.Name:lower()
-          if name == "newabundances" or name == "abundancespawns"
-              or name == "huntpools" or name == "hunt" then
-              add(root)
-          end
-      end
-      return roots
-  end
   fishEsp.distance = function(a, b)
       local prev = {}
       for j = 0, #b do prev[j] = j end
@@ -1645,32 +1538,21 @@
       end
   end
   fishEsp.searchAll = function(now)
+      if not fishEsp.enabled then return end
       if fishEsp.searchText ~= fishEsp.text then
           fishEsp.searchText = fishEsp.text
           fishEsp.queries, fishEsp.scan = {}, nil
           fishEsp.retryAt = 0
-          local seen = {}
-          for value in fishEsp.text:gmatch("[^,;]+") do
-              local query = fishEsp.normalize(value):sub(1, 64)
-              if #query >= 3 and query:find("%a") and not seen[query]
-                  and #fishEsp.queries < 8 then
-                  seen[query] = true
-                  fishEsp.queries[#fishEsp.queries + 1] = query
-              end
-          end
-          fishEsp.rareRequested = false
-          for _, query in ipairs(fishEsp.queries) do
-              if fishEsp.isHuntName(query) then
-                  fishEsp.rareRequested = true
-                  break
-              end
+          local query = fishEsp.normalize(fishEsp.text):sub(1, 64)
+          if #query >= 3 and query:find("%a") then
+              fishEsp.queries[1] = query
           end
           fishEsp.queryReady = #fishEsp.queries > 0
           fishEsp.setTargets({})
       end
       if not fishEsp.queryReady then
           fishEsp.scan = nil
-          fishEsp.status.Text = "Enter fish names"
+          fishEsp.status.Text = "Enter one fish name"
           return
       end
       local character = player.Character
@@ -1682,27 +1564,20 @@
           local active = W:FindFirstChild("active")
           local roaming = active and active:FindFirstChild("roamingFish")
           local moved = fishEsp.areaOrigin and (origin - fishEsp.areaOrigin).Magnitude >= 250
-          if not fishEsp.rareRequested and (roaming ~= fishEsp.areaFolder or moved) then
+          if roaming ~= fishEsp.areaFolder or moved then
               fishEsp.scan = nil
               fishEsp.areaFolder, fishEsp.areaOrigin = roaming, origin
-          elseif not fishEsp.rareRequested and not fishEsp.areaOrigin then
+          elseif not fishEsp.areaOrigin then
               fishEsp.areaOrigin = origin
           end
       end
       if not fishEsp.scan then
           if now < (fishEsp.retryAt or 0) then return end
-          local scanRoots
-          if fishEsp.rareRequested then
-              scanRoots = fishEsp.huntRoots()
-          else
-              local active = W:FindFirstChild("active")
-              local roaming = active and active:FindFirstChild("roamingFish")
-              scanRoots = roaming and {roaming} or {}
-          end
+          local active = W:FindFirstChild("active")
+          local roaming = active and active:FindFirstChild("roamingFish")
+          local scanRoots = roaming and {roaming} or {}
           if #scanRoots == 0 then
-              fishEsp.status.Text = fishEsp.rareRequested
-                  and "Waiting for active hunt / abundance fish"
-                  or "Waiting for live fish"
+              fishEsp.status.Text = "Waiting for live roaming fish"
               fishEsp.retryAt = now + 5
               return
           end
@@ -1715,16 +1590,13 @@
           end
       end
       local scan = fishEsp.scan
-      fishEsp.status.Text = fishEsp.rareRequested
-          and "Scanning hunt / abundance fish..."
-          or "Scanning for fish..."
+      fishEsp.status.Text = "Scanning roaming fish..."
       for step = 1, (panelInputCaptured or dragging) and 1 or 4 do
           local item = scan.queue[scan.index]
           if not item then
               fishEsp.setTargets(scan.targets)
               fishEsp.status.Text = #scan.targets .. " fish | "
-                  .. (fishEsp.rareRequested and "hunt full-map" or "local scan")
-                  .. " | refresh 5s"
+                  .. "roaming | refresh 5s"
               fishEsp.scan = nil
               fishEsp.retryAt = now + 5
               return
@@ -1747,9 +1619,10 @@
                   part = object.PrimaryPart or object:FindFirstChild("Hitbox")
                       or object:FindFirstChild("Center")
               end
-              local huntName = fishEsp.isHuntName(name)
-              local inRange = (fishEsp.rareRequested and huntName) or not part
-                  or (part.Position - origin).Magnitude <= 1000
+              if class == "Model" and not part then
+                  part = object:FindFirstChildWhichIsA("BasePart", true)
+              end
+              local inRange = not part or (part.Position - origin).Magnitude <= 670
               if not container and not inRange then return end
               local matches = scan.names[name]
               if class == "Folder" or not inRange then matches = false end
@@ -1777,11 +1650,10 @@
               end
               if part and owner and not scan.seen[owner] and #scan.targets < 64 then
                   local position = part.Position
-                  if huntName or (position - origin).Magnitude <= 1000 then
+                      if (position - origin).Magnitude <= 670 then
                       scan.seen[owner] = true
                       scan.targets[#scan.targets + 1] = {
                           model = owner, part = part, name = ownerName, fixedPart = true,
-                          fullMap = fishEsp.isHuntName(ownerName),
                       }
                       fishEsp.liveSeen = fishEsp.liveSeen or {}
                       if not fishEsp.liveSeen[owner] and #fishEsp.targets < 64 then
@@ -1826,7 +1698,7 @@
           local keep = false
           pcall(function()
                   keep = entry.model.Parent and entry.part.Parent
-                      and (entry.fullMap or (entry.part.Position - origin).Magnitude <= 1000)
+                      and (entry.part.Position - origin).Magnitude <= 670
           end)
           if keep then activeTargets[#activeTargets + 1] = entry end
       end
@@ -1851,7 +1723,7 @@
               end
               local position = entry.part.Position
               local distance = (position - origin).Magnitude
-              if not entry.fullMap and distance > 1000 then
+               if distance > 670 then
                   if drawing then drawing.Visible = false end
                   return
               end
@@ -1893,10 +1765,7 @@
       local space = iskeypressed(0x20) == true
       if space and not fishEsp.keys[0x20] then fishEsp.text = fishEsp.text .. " " end
       fishEsp.keys[0x20] = space
-      local comma = iskeypressed(0xBC) == true
-      if comma and not fishEsp.keys[0xBC] then fishEsp.text = fishEsp.text .. ", " end
-      fishEsp.keys[0xBC] = comma
-      fishEsp.text = fishEsp.text:sub(1, 512)
+      fishEsp.text = fishEsp.text:sub(1, 64)
       local backspace = iskeypressed(0x08) == true
       if backspace and not fishEsp.keys[0x08] then fishEsp.text = fishEsp.text:sub(1, math.max(0, #fishEsp.text - 1)) end
       fishEsp.keys[0x08] = backspace
@@ -1907,7 +1776,7 @@
       end
       fishEsp.keys[0x0D] = enter
       fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
-          or "fish names; hunt names get full-map ESP"
+          or "one roaming fish name"
       fishEsp.input.Color = fishEsp.text ~= "" and C.white or C.muted
   end
   fishEsp.toggleEnabled = function()
@@ -1922,7 +1791,7 @@
       if not fishEsp.enabled then
           fishEsp.clearDrawings()
       elseif not fishEsp.queryReady then
-          fishEsp.status.Text = "Enter fish names"
+          fishEsp.status.Text = "Enter one fish name"
       end
   end
   task.spawn(function()
@@ -1972,6 +1841,14 @@
       if not ok then warn("Custom GPS teleport: " .. tostring(err)) end
   end
   local function updatePanelInput(focused)
+      if not focused or not shown then
+          fishEsp.editing = false
+          rodSpeed.editing = false
+          customGpsEditing = false
+          leftWasDown = false
+          releasePanelInput()
+          return
+      end
       local x, y = cursor.X, cursor.Y
       local dropdownX = teleportWindow.x
       local dropdownY = teleportWindow.y
@@ -1979,17 +1856,17 @@
           npcMenuOpen
               and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
               or (autoTotem.open and 212 or 32)) * uiScale
-      local insideMain = focused and shown and lastPanelX and lastPanelY
+      local insideMain = lastPanelX and lastPanelY
           and type(x) == "number" and type(y) == "number"
           and x >= lastPanelX and x <= lastPanelX + PANEL_W * uiScale
           and y >= lastPanelY and y <= lastPanelY + PANEL_H * uiScale
-      local insideDropdown = focused and shown and (npcMenuOpen or autoTotem.open)
+      local insideDropdown = (npcMenuOpen or autoTotem.open)
           and dropdownX and dropdownY
           and type(x) == "number" and type(y) == "number"
           and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
           and y >= dropdownY and y <= dropdownY + dropdownHeight
       local inside = insideMain or insideDropdown
-      local capture = focused and shown and (inside or dragging)
+      local capture = inside or dragging or teleportWindow.dragging
       if capture and not panelInputCaptured then
           mouse(false)
           releaseKey()
@@ -1998,7 +1875,6 @@
               navigationReleaseAt = nil
           end
           navigationWanted = navigationOn
-          setrobloxinput(false)
           panelInputCaptured = true
       elseif not capture then
           releasePanelInput()
@@ -2025,13 +1901,13 @@
           automationArrow.Text = automationMenuOpen and "^" or "v"
           layoutTeleportMenus()
       end
-      if fishEsp.editing and inside and down and not leftWasDown
-          and not (contentY >= 420 and contentY < 446) then
+       if fishEsp.editing and down and not leftWasDown
+           and not (inside and contentY >= 420 and contentY < 446) then
           fishEsp.editing = false
           pcall(setrobloxinput, true)
       end
-      if rodSpeed.editing and inside and down and not leftWasDown
-          and not (contentY >= 352 and contentY < 378) then
+       if rodSpeed.editing and down and not leftWasDown
+           and not (inside and contentY >= 352 and contentY < 378) then
           rodSpeed.editing = false
           pcall(setrobloxinput, true)
       end
@@ -2048,7 +1924,7 @@
           fishEsp.editing = true
           fishEsp.keys = {}
           fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
-              or "fish names; hunt names get full-map ESP"
+              or "one roaming fish name"
       elseif inside and not dragging and down and not leftWasDown
           and contentY >= 444 and contentY <= 470 then
           fishEsp.toggleEnabled()
@@ -2060,8 +1936,8 @@
           rodSpeed.toggleEnabled()
           releasePanelInput()
       end
-      if customGpsEditing and inside and down and not leftWasDown
-          and not (localY >= 406 and localY < 430) then
+       if customGpsEditing and down and not leftWasDown
+           and not (inside and localY >= 406 and localY < 430) then
           customGpsEditing = false
           pcall(setrobloxinput, true)
       end
@@ -2070,7 +1946,8 @@
           and localX >= 10 and localX <= 147
           and contentY >= 311 and contentY <= 334 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
-          castModeText.Text = castMode .. " cast"
+          castModeText.Text = castMode == "Perfect"
+              and "Perfect cast ON" or "Perfect cast OFF"
           castModeText.Color = castMode == "Instant" and C.instantOff or C.green
           lastDisplay = ""
       end
@@ -2126,7 +2003,6 @@
           elseif insideDropdown and localY >= 406 and localY < 430 then
               customGpsEditing = true
               customGpsKeys = {}
-              pcall(setrobloxinput, false)
               updateCustomGpsDisplay()
           elseif insideDropdown and localY >= 456 and localY < 484 then
               npcSubOpen = not npcSubOpen
@@ -2279,8 +2155,38 @@
       end
   end
   local function serverClock()
-      local minutes = Lighting:GetAttribute("CurrentTime")
-      if type(minutes) ~= "number" then return "?", false end
+      local minutes
+      local source
+      for _, attribute in ipairs({"CurrentTime", "currentTime", "MinutesAfterMidnight"}) do
+          local value = Lighting:GetAttribute(attribute)
+          if type(value) == "number" and value == value
+              and math.abs(value) < math.huge then
+              minutes, source = value, attribute
+              break
+          end
+      end
+      if not minutes then
+          local clockTime = Lighting:GetAttribute("ClockTime")
+          if type(clockTime) == "number" and clockTime == clockTime
+              and math.abs(clockTime) < math.huge then
+              minutes, source = clockTime * 60, "ClockTime"
+          end
+      end
+      if not minutes then
+          local ok, value = pcall(function()
+              return Lighting:GetMinutesAfterMidnight()
+          end)
+          if ok and type(value) == "number" and value == value
+              and math.abs(value) < math.huge then
+              minutes, source = value, "GetMinutesAfterMidnight"
+          end
+      end
+      if not minutes then return "?", nil end
+      -- Some versions expose CurrentTime as hours while other versions use
+      -- minutes.  ClockTime is explicitly hours; normalize it here.
+      if source == "CurrentTime" and minutes >= 0 and minutes <= 24 then
+          minutes = minutes * 60
+      end
       minutes = minutes % 1440
       local hour = math.floor(minutes / 60)
       local minute = math.floor(minutes % 60)
@@ -2315,15 +2221,14 @@
       end
       return value
   end
-  local function normalized(value)
-      return (cleanText(value) or ""):lower()
-  end
   local function readEnvironment(now)
       gui = player and player:FindFirstChild("PlayerGui") or gui
-      world = (W and W:FindFirstChild("world"))
-          or (RS and RS:FindFirstChild("world")) or nil
-      local events, descriptions = {}, {}
-      local seenEvents, seenDescriptions = {}, {}
+      world = (RS and RS:FindFirstChild("world"))
+          or (W and W:FindFirstChild("world")) or nil
+      local events = {}
+      local seenEvents = {}
+      -- Keep countdowns scoped to the current environment snapshot.
+      local snapshotDeadlines = {}
       local serverNow = now
       local okClock, valueClock = pcall(function()
           return os.time()
@@ -2337,23 +2242,14 @@
       if okServerNow and type(valueServerNow) == "number" then
           serverNow = valueServerNow
       end
-      local function describe(value)
-          value = cleanText(value)
-          if not value then return end
-          local key = value:lower()
-          if not seenDescriptions[key] then
-              seenDescriptions[key] = true
-              descriptions[#descriptions + 1] = value
-          end
-      end
-      local function include(value)
-          value = cleanText(value)
-          if not value then return end
-          describe(value)
+       local function include(value)
+           value = cleanText(value)
+           if not value then return end
           local title = value:match("[^\n]+") or value
           local titleLower = title:lower()
           if titleLower:find("name unavailable", 1, true) then return end
           local key = title:lower():gsub("%s+", " ")
+          --[[ modifier detection intentionally disabled
           for line in value:gmatch("[^\n]+") do
               local lower = line:lower()
               if line ~= title and not lower:find("remaining", 1, true)
@@ -2375,17 +2271,18 @@
                   break
               end
           end
+          ]]
           local minutes, seconds = value:match("(%d+):(%d%d)%s*[rR]emaining")
           if minutes and seconds then
               local remaining = tonumber(minutes) * 60 + tonumber(seconds)
-              local deadline = eventDeadlines[key]
-              local candidate = now + remaining
+              local deadline = snapshotDeadlines[key]
+              local candidate = tick() + remaining
               -- HUD labels can lag each other by a fraction of a second.
               -- Keep the cached deadline through small jitter instead of
               -- repeatedly snapping the countdown backward and forward.
               if not deadline or deadline <= now
                   or math.abs(candidate - deadline) > 2 then
-                  eventDeadlines[key] = candidate
+                  snapshotDeadlines[key] = candidate
               end
           end
           local index = seenEvents[key]
@@ -2401,44 +2298,91 @@
           if not name then return end
           local key = name:lower():gsub("%s+", " ")
           local text = name
-           local modifier = eventFallbackModifiers[key] or eventModifiers[key]
-          if modifier then
-              text = text .. "\n" .. modifier
+           local remaining
+           local numericEndTime = tonumber(endTime)
+           if numericEndTime and numericEndTime >= 1000000000000 then
+               numericEndTime = numericEndTime / 1000
+           end
+           if numericEndTime and numericEndTime >= 100000000 then
+               remaining = numericEndTime - os.time()
+               if remaining <= 0 then return end
           end
-          local remaining
-          local directDuration
-          if type(endTime) == "number" and endTime >= 100000000 then
-              remaining = math.max(0, endTime - serverNow)
-          elseif type(endTime) == "number" and endTime > 0 then
-              directDuration = endTime > 1000 and endTime / 1000 or endTime
-          end
-          if remaining and remaining <= 0 then remaining = nil end
-          if not remaining and eventDeadlines[key] then
-              local cachedRemaining = eventDeadlines[key] - now
+          if not remaining and snapshotDeadlines[key] then
+              local cachedRemaining = snapshotDeadlines[key] - tick()
               if cachedRemaining > 0 then
                   remaining = cachedRemaining
-              else
-                  eventDeadlines[key] = nil
               end
           end
-          if not remaining then
-              local duration = directDuration or eventDurations[key]
-              if duration then
-                  if not eventStartTimes[key]
-                      or now - eventStartTimes[key] >= duration then
-                      eventStartTimes[key] = now
-                  end
-                  remaining = math.max(0, duration - (now - eventStartTimes[key]))
-              end
-          end
+          -- Never invent a start time from when this client noticed an event.
           if remaining then
+              snapshotDeadlines[key] = tick() + remaining
               text = text .. string.format(
                   "\n%02d:%02d remaining",
                   math.floor(remaining / 60), math.floor(remaining % 60)
               )
           end
-          include(text)
-      end
+           include(text)
+       end
+       local function scanServerState(root)
+           if not root then return end
+           -- Walk in bounded batches: Matcha tree reads can block all Lua tasks.
+           local queue, index, slice = root:GetChildren(), 1, tick()
+           while index <= #queue do
+               if not alive then return end
+               local item = queue[index]
+               queue[index], index = false, index + 1
+               for _, child in ipairs(item:GetChildren()) do
+                   queue[#queue + 1] = child
+               end
+               local itemName = tostring(item.Name):lower()
+               local normalizedName = itemName:gsub("[^%w]", "")
+               local relevant = itemName:find("weather", 1, true)
+                   or itemName:find("event", 1, true)
+                   or (itemName:find("absolute", 1, true)
+                       and itemName:find("dark", 1, true))
+                   or itemName:find("meteor", 1, true)
+                   or itemName:find("blizzard", 1, true)
+                   or itemName:find("aurora", 1, true)
+                   or itemName:find("rainbow", 1, true)
+                   or itemName:find("tropical", 1, true)
+               if relevant and item.ClassName == "StringValue" then
+                   local value = cleanText(item.Value)
+                   local lower = value and value:lower() or ""
+                   if value and lower ~= "none" and lower ~= "no event"
+                       and lower ~= "false" then
+                       includeKnown(value, item:GetAttribute("EndTime")
+                           or item:GetAttribute("endTime"))
+                   end
+               elseif relevant and item.ClassName == "BoolValue" and item.Value then
+                   local displayName = item.Name:gsub("[_%-]", " ")
+                       :gsub("[Aa]ctive$", "")
+                   if normalizedName ~= "active" and normalizedName ~= "enabled" then
+                       includeKnown(displayName)
+                   end
+               end
+               if tick() - slice >= 0.003 then
+                   task.wait()
+                   slice = tick()
+               end
+           end
+           for attribute, value in pairs(root:GetAttributes()) do
+               -- Matcha returns an array of names; Roblox returns a dictionary.
+               if type(attribute) == "number" and type(value) == "string" then
+                   attribute, value = value, root:GetAttribute(value)
+               end
+               local name = tostring(attribute):lower()
+               if name:find("weather", 1, true)
+                   or name:find("event", 1, true)
+                   or (name:find("absolute", 1, true)
+                       and name:find("dark", 1, true)) then
+                   local text = cleanText(tostring(value))
+                   if text and text:lower() ~= "none"
+                       and text:lower() ~= "false" then
+                       includeKnown(text)
+                   end
+               end
+           end
+       end
       local hud = gui and gui:FindFirstChild("hud")
       local safe = hud and hud:FindFirstChild("safezone")
       local statuses = safe and safe:FindFirstChild("worldstatuses")
@@ -2506,6 +2450,14 @@
               end
            end
        end
+       scanServerState(world)
+        do
+            local liveWorld = W and W:FindFirstChild("world")
+            if liveWorld then
+                scanServerState(liveWorld:FindFirstChild("events"))
+                scanServerState(liveWorld:FindFirstChild("weather"))
+            end
+        end
        if not eventIconColors._loadAttempted then
            eventIconColors._loadAttempted = true
            pcall(function()
@@ -2543,27 +2495,39 @@
        end
        if weatherApi and type(weatherApi.GetAllActive) == "function" then
            local okWeather, activeWeather = pcall(function()
-               return weatherApi.GetAllActive()
+               return weatherApi:GetAllActive()
            end)
+           if not okWeather then
+               okWeather, activeWeather = pcall(function()
+                   return weatherApi.GetAllActive()
+               end)
+           end
            if okWeather and type(activeWeather) == "table" then
-               for _, weatherName in ipairs(activeWeather) do
-                   local config = weatherLibrary and weatherLibrary[weatherName]
-                   local displayName = config and (config.DisplayName or config.Name) or weatherName
-                   includeKnown(displayName)
+               for key, weatherName in pairs(activeWeather) do
+                   local name = type(weatherName) == "string" and weatherName
+                       or type(key) == "string" and key or nil
+                   if name and name:lower() ~= "none" then
+                       local config = weatherLibrary and weatherLibrary[name]
+                       local displayName = config
+                           and (config.DisplayName or config.Name) or name
+                       includeKnown(displayName)
+                   end
                end
            end
        end
        for attribute, displayName in pairs(localizedEventNames) do
            local activeUntil = W:GetAttribute(attribute)
+           if activeUntil == nil then activeUntil = W:GetAttribute(attribute .. "Active") end
            local numericUntil = tonumber(activeUntil)
+           if numericUntil and numericUntil >= 1000000000000 then
+               numericUntil = numericUntil / 1000
+           end
            if numericUntil and numericUntil >= 100000000 then
                if numericUntil > serverNow then
                    includeKnown(displayName, numericUntil)
                end
-           elseif numericUntil and numericUntil > 0 then
-               eventDurations[displayName:lower()] = numericUntil > 1000
-                   and numericUntil / 1000 or numericUntil
-               includeKnown(displayName)
+            elseif numericUntil and numericUntil > 0 then
+                includeKnown(displayName)
            elseif activeUntil == true
                or (type(activeUntil) == "string"
                    and activeUntil:lower() == "true") then
@@ -2582,20 +2546,7 @@
               include(entry[2])
           end
       end
-      if world then
-          for _, flag in ipairs(world:GetDescendants()) do
-              if flag.ClassName == "BoolValue" and flag.Value == true then
-                  local n = flag.Name:lower():gsub("[^%w]", "")
-                  if n:find("meteor", 1, true) and n:find("active", 1, true) then
-                      include("Meteor")
-                  elseif n:find("absolute", 1, true)
-                      and n:find("dark", 1, true)
-                      and n:find("active", 1, true) then
-                      include("Absolute Darkness")
-                  end
-              end
-          end
-      end
+      -- Nested active flags are already collected by scanServerState.
       local boostsGui = gui and gui:FindFirstChild("CurrentServerBoosts")
       local boosts = boostsGui and boostsGui:FindFirstChild("boosts")
       if boosts then
@@ -2610,27 +2561,12 @@
                   and cleanText(amount.Text)
               if titleValue and amountValue then
                   local boostText = titleValue .. " " .. amountValue
-                  describe(boostText)
                   local boostName = titleValue:lower()
                   if boostName:find("meteor", 1, true)
                       or boostName:find("absolute", 1, true)
                       or boostName:find("darkness", 1, true)
                       or boostName:find("event", 1, true) then
                       include(boostText)
-                  end
-              end
-              for _, item in ipairs(entry:GetDescendants()) do
-                  if item.ClassName == "TextLabel" then
-                      local value = cleanText(item.Text)
-                      if value then
-                          local lower = value:lower()
-                          if lower:find("luck", 1, true)
-                              or lower:find("shiny", 1, true)
-                              or lower:find("sparkling", 1, true)
-                              or lower:find("mutation", 1, true) then
-                              describe(value)
-                          end
-                      end
                   end
               end
           end
@@ -2643,37 +2579,15 @@
               or n:find("rainbow", 1, true) then
               return 1
           end
-          if n:find("shiny", 1, true)
-              or n:find("sparkling", 1, true)
-              or n:find("mutation", 1, true) then
-              return 2
-          end
-          return 3
+          return 2
       end
       table.sort(events, function(a, b)
           local pa, pb = priority(a), priority(b)
           if pa == pb then return a < b end
           return pa < pb
       end)
-      return events, descriptions
-  end
-  local function advertisedLuck(descriptions, scope)
-      local found
-      for _, description in ipairs(descriptions) do
-          local text = normalized(description)
-          local raw =
-              text:match(scope .. "%s+luck%s*[:=]?%s*x%s*(%d+%.?%d*)")
-              or text:match(scope .. "%s+luck%s*[:=]?%s*(%d+%.?%d*)%s*x")
-              or text:match("(%d+%.?%d*)%s*x%s+" .. scope .. "%s+luck")
-          local value = raw and tonumber(raw)
-          if value and value > 0 then
-              if found and found ~= value then
-                  return nil, true
-              end
-              found = value
-          end
-      end
-      return found, false
+       eventDeadlines = snapshotDeadlines
+       return events
   end
   local function wrapEventTitle(value)
       local limit = 38
@@ -2728,8 +2642,6 @@
            if timer and not title:find(timer, 1, true) then
                title = title .. "  [" .. timer .. "]"
            end
-           local modifier = eventFallbackModifiers[key] or eventModifiers[key]
-           if modifier then title = title:gsub("%s+$", "") .. "  |  " .. modifier end
            local firstTitle, secondTitle = wrapEventTitle(title)
            local row = weatherLines[rowSlot]
            row.Text = firstTitle
@@ -2766,11 +2678,14 @@
       fishText.Text = "Caught    "
           .. (sessionCaught and tostring(sessionCaught) or "--")
       local clock, isDaytime = serverClock()
-      local period = isDaytime and "Daytime" or "Nighttime"
+      local period = isDaytime == nil and "Unknown"
+          or isDaytime and "Daytime" or "Nighttime"
       clockText.Text = "Server    " .. clock .. " (" .. period .. ")"
-      local blend = 1 - math.exp(-0.5 * 5)
-      clockDayBlend = clockDayBlend
-          + ((isDaytime and 1 or 0) - clockDayBlend) * blend
+      if isDaytime ~= nil then
+          local blend = 1 - math.exp(-0.5 * 5)
+          clockDayBlend = clockDayBlend
+              + ((isDaytime and 1 or 0) - clockDayBlend) * blend
+      end
       local nightText = Color3.fromRGB(210, 230, 255)
       local dayText = Color3.fromRGB(255, 235, 80)
       clockText.Color = Color3.new(
@@ -2778,20 +2693,6 @@
           nightText.G + (dayText.G - nightText.G) * clockDayBlend,
           nightText.B + (dayText.B - nightText.B) * clockDayBlend
       )
-      if now >= nextEnvironment then
-           cachedEvents, cachedDescriptions = readEnvironment(now)
-          nextEnvironment = now + ENVIRONMENT_INTERVAL
-      end
-      local serverLuck, serverConflict =
-          advertisedLuck(cachedDescriptions, "server")
-      local globalLuck, globalConflict =
-          advertisedLuck(cachedDescriptions, "global")
-      if not serverLuck and not serverConflict then
-          serverLuck = numberValue(world, "luck_Server")
-      end
-      if not globalLuck and not globalConflict then
-          globalLuck = numberValue(world, "luck_Luck")
-      end
       environmentText(cachedEvents, now)
   end
   autoTotem.setStatus = function(text, color)
@@ -2811,18 +2712,31 @@
               local label = item:FindFirstChild("ItemName", true)
               local text
               if label then pcall(function() text = label.Text end) end
-              if type(text) == "string" and text ~= "" then
+              if type(text) ~= "string" then text = "" end
+              local slotNumber
+              pcall(function()
+                  slotNumber = tonumber(item:GetAttribute("Slot"))
+                      or tonumber(item:GetAttribute("slot"))
+                      or tonumber(item.Name:match("%d+"))
+              end)
+              if text ~= "" or slotNumber then
                   local position
                   pcall(function() position = item.AbsolutePosition end)
                   entries[#entries + 1] = {
                       text = text,
+                      slot = slotNumber,
+                      item = item,
                       x = position and position.X or (#entries + 1),
                   }
               end
           end
       end
       table.sort(entries, function(left, right) return left.x < right.x end)
-      local slot9 = entries[9]
+      local slot9
+      for _, entry in ipairs(entries) do
+          if entry.slot == 9 then slot9 = entry; break end
+      end
+      slot9 = slot9 or entries[9]
       if not slot9 then return nil, nil end
       local normalized = slot9.text:lower():gsub("[^%w]", "")
       if normalized:find("aurora", 1, true) or normalized:find("lucktotem", 1, true) then
@@ -2900,10 +2814,14 @@
       end
       if fastNoEvent then return false end
       if (forceRefresh or now >= nextEnvironment)
-          and (hardRefresh or now >= (autoTotem.nextFullEventScan or 0)) then
-          cachedEvents, cachedDescriptions = readEnvironment(now)
-          nextEnvironment = now + ENVIRONMENT_INTERVAL
-          autoTotem.nextFullEventScan = now + 1
+          and (hardRefresh or now >= (autoTotem.nextFullEventScan or 0))
+          and not autoTotem.environmentBusy then
+          autoTotem.environmentBusy = true
+          local ok, events = pcall(readEnvironment, now)
+          autoTotem.environmentBusy = false
+          if ok and alive then cachedEvents = events end
+          nextEnvironment = tick() + ENVIRONMENT_INTERVAL
+          autoTotem.nextFullEventScan = tick() + 1
       end
       if not targetKind then return false end
       for _, value in ipairs(cachedEvents or {}) do
@@ -3468,6 +3386,7 @@
       autoTotem.startupCheckPending = false
       autoTotem.startupConfirmed = false
       autoTotem.generation = autoTotem.generation + 1
+      setGuiDragCapture(false)
       disableInstant()
       rodSpeed.stop()
       equipPending = false
@@ -3494,20 +3413,57 @@
       for _, d in ipairs(drawings) do
           d:Remove()
       end
-      for _, d in ipairs(totemMenu.startupIntro.drawings) do
-          d:Remove()
-      end
       teleportWindow.bg:Remove()
       teleportWindow.border:Remove()
       fishEsp.clearDrawings()
       _G.StopFischMacro = nil
   end
   _G.StopFischMacro = macroCallbacks.stop
+  -- Match the display cadence while dragging; the worker still handles
+  -- clicks and automation, and remains a fallback if rendering is unavailable.
+  macroCallbacks.renderConnection = nil
+  pcall(function()
+      local runService = game:GetService("RunService")
+      macroCallbacks.renderConnection = runService.RenderStepped:Connect(function()
+          if not alive then return end
+          local ok, err = pcall(updateDrag, isrbxactive())
+          if not ok then
+              macroCallbacks.stop()
+              warn("GUI drag stopped: " .. tostring(err))
+          end
+      end)
+      table.insert(inputConnections, macroCallbacks.renderConnection)
+  end)
   pcall(function()
       table.insert(inputConnections, player.AncestryChanged:Connect(function(_, parent)
           if not parent then macroCallbacks.stop() end
       end))
+      table.insert(inputConnections, Players.PlayerRemoving:Connect(function(leavingPlayer)
+          if leavingPlayer == player then macroCallbacks.stop() end
+      end))
   end)
+  macroCallbacks.setShown = function(value)
+                  shown = value
+                  if shown then
+                      fadeLastTime = tick()
+                      layoutTeleportMenus()
+                  else
+                      dragging = false
+                      teleportWindow.dragging = false
+                      setGuiDragCapture(false)
+                      fishEsp.editing = false
+                      rodSpeed.editing = false
+                      customGpsEditing = false
+                      pcall(setrobloxinput, true)
+                      releasePanelInput()
+                      npcMenuOpen, npcSubOpen = false, false
+                      totemMenu.open, islandMenu.open = false, false
+                      autoTotem.open = false
+                      npcMenuAnim, totemMenu.anim = 0, 0
+                      islandMenu.anim, autoTotem.anim = 0, 0
+                      layoutTeleportMenus()
+                  end
+  end
   macroCallbacks.edge = function(key)
       local value = iskeypressed(key)
       local current = value == true
@@ -3624,11 +3580,24 @@
   previous[AUTO_TOTEM_KEY] = iskeypressed(AUTO_TOTEM_KEY) == true
   shown = true
   fadeAmount = 1
-  totemMenu.startupIntro.active = false
-  totemMenu.startupIntro.started = tick()
-  totemMenu.startupIntro.amount = 0
   fadeLastTime = tick()
   updateFade(fadeLastTime)
+  refreshStats(tick())
+  nextStats = tick() + 1
+  task.spawn(function()
+      while alive do
+          if tick() >= nextEnvironment and not autoTotem.environmentBusy then
+              autoTotem.environmentBusy = true
+              local ok, events = pcall(readEnvironment, tick())
+              autoTotem.environmentBusy = false
+              if not alive then return end
+              if ok then cachedEvents = events
+              else warn("Environment refresh: " .. tostring(events)) end
+              nextEnvironment = tick() + ENVIRONMENT_INTERVAL
+          end
+          task.wait(0.1)
+      end
+  end)
   task.spawn(function()
       while alive do
           if autoTotem.enabled then
@@ -3685,12 +3654,10 @@
                   navigationWanted = navigationOn
               end
               if not panelInputCaptured then updateKeys(now) end
-              updateDrag(focused)
+              if not macroCallbacks.renderConnection then updateDrag(focused) end
+              if hide then macroCallbacks.setShown(not shown) end
               if focused then
-                  if hide then
-                      shown = not shown
-                  end
-              if instantToggle then toggleInstant() end
+               if instantToggle then toggleInstant() end
                   if toggle then
                       toggleMacro()
                   end
@@ -3831,11 +3798,21 @@
                               end
                           end
                       elseif releaseAt then
-                          if castMode == "Instant" and now - releaseAt >= INSTANT_HOLD then
-                              mouse(false)
-                              releaseAt = nil
-                              nextCast = now + RETRY
-                              display("INSTANT CAST")
+                          if castMode == "Instant" then
+                              -- In fast mode, release on the first visible cast
+                              -- meter sample instead of guessing with a timer.
+                              local castPercent = castReading()
+                              if castPercent ~= nil then
+                                  mouse(false)
+                                  releaseAt = nil
+                                  nextCast = now + RETRY
+                                  display("PERFECT CAST OFF")
+                              elseif now - releaseAt >= CAST_TIMEOUT then
+                                  mouse(false)
+                                  releaseAt = nil
+                                  nextCast = now + RETRY
+                                  display("CAST METER UNAVAILABLE / RETRY")
+                              end
                           elseif castMode == "Perfect" then
                               if now >= perfectCastNextUpdate then
                                   perfectCastNextUpdate = now + PERFECT_CAST_UPDATE
@@ -3864,7 +3841,7 @@
                               nextCast = now + RETRY
                               display("CAST METER UNAVAILABLE / RETRY")
                           else
-                              display("INSTANT CAST")
+                              display("PERFECT CAST OFF")
                           end
                       elseif dragging then
                           display("MOVING PANEL")
@@ -3875,7 +3852,8 @@
                               perfectCastPercent, perfectCastInGreen = nil, false
                               mouse(true)
                               releaseAt = now -- Start of charge; not a release deadline.
-                              display(castMode == "Instant" and "INSTANT CAST" or "CAST 0% / 100%")
+                              display(castMode == "Instant"
+                                  and "PERFECT CAST OFF" or "CAST 0% / 100%")
                           elseif ensureFishingRod() then
                               equipPending = false
                               equipReadyAt = now + 0.40
@@ -3892,20 +3870,26 @@
                       end
                   end
               end
-              if (enabled or autoTotem.enabled) and now >= nextStats then
+              if now >= nextStats then
                   refreshStats(now)
-                  nextStats = now + 0.5
+                  nextStats = now + 1
               end
               updateDropdownAnimation(now)
-              totemMenu.updateStartupIntro(now)
               updateFade(now)
               local activeWork = enabled or autoTotem.enabled or fishEsp.enabled
                   or instantEnabled or rodSpeed.enabled or harpoonPullEnabled
                   or dragging or teleportWindow.dragging
               local uiAnimating = dragging or teleportWindow.dragging
                   or npcMenuOpen or autoTotem.open or totemMenu.open
-                  or islandMenu.open or totemMenu.startupIntro.active
-              task.wait((activeWork or uiAnimating) and 0.016 or 0.05)
+                  or islandMenu.open
+              -- Poll visible UI at up to 120 Hz; unchanged geometry is cached.
+              -- Decorative color/fade work has its separate 60 Hz budget.
+              local loopDelay = shown and 1 / 120
+                  or enabled and 0.016
+                  or activeWork and 0.016
+                  or (shown or uiAnimating) and 0.016
+                  or 0.05
+              task.wait(loopDelay)
           end
       end)
       if not ok then
