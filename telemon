@@ -1,0 +1,64 @@
+if _G.TelamonQuestESPStop then pcall(_G.TelamonQuestESPStop) end
+
+local RunService = game:GetService("RunService")
+local folder = game.Workspace.Gimmicks.Island2.Buttons
+local models = folder:GetChildren()
+local targets, drawings = {}, {}
+local alive = true
+
+for i = 1, #models do
+    local part = models[i]:FindFirstChildWhichIsA("BasePart", true)
+    if part then
+        targets[#targets + 1] = {part = part, name = "Button " .. i}
+    end
+end
+
+for i = 1, #targets do
+    local box = Drawing.new("Square")
+    box.Size = Vector2.new(18, 18)
+    box.Color = Color3.fromRGB(255, 80, 80)
+    box.Thickness = 2
+    box.Filled = false
+    box.Visible = false
+    box.ZIndex = 10
+
+    local text = Drawing.new("Text")
+    text.Text = targets[i].name
+    text.Size = 15
+    text.Color = Color3.fromRGB(255, 120, 100)
+    text.Outline = true
+    text.Center = true
+    text.Visible = false
+    text.ZIndex = 11
+
+    drawings[i] = {box = box, text = text}
+end
+
+local conn
+conn = RunService.RenderStepped:Connect(function()
+    if not alive then return end
+    for i = 1, #targets do
+        local screen, visible = WorldToScreen(targets[i].part.Position + Vector3.new(0, 2, 0))
+        local d = drawings[i]
+        d.box.Visible = visible
+        d.text.Visible = visible
+        if visible then
+            d.box.Position = Vector2.new(screen.X - 9, screen.Y - 9)
+            d.text.Position = Vector2.new(screen.X, screen.Y - 27)
+        end
+    end
+end)
+
+local function stop()
+    alive = false
+    if conn then conn:Disconnect() end
+    _G.TelamonQuestESPStop = nil
+    for i = 1, #drawings do
+        pcall(function() drawings[i].box:Remove() end)
+        pcall(function() drawings[i].text:Remove() end)
+    end
+end
+
+_G.TelamonQuestESPStop = stop
+print("Button ESP loaded for " .. #targets .. " buttons")
+
