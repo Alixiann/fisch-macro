@@ -1,0 +1,94 @@
+if _G.Person299QuestESPStop then pcall(_G.Person299QuestESPStop) end
+
+local RunService = game:GetService("RunService")
+local targets, drawings = {}, {}
+local alive = true
+
+local function matches(name)
+    return string.find(string.lower(name), "egg") ~= nil
+end
+
+local function rebuild()
+    for i = 1, #drawings do
+        pcall(function() drawings[i].box:Remove() end)
+        pcall(function() drawings[i].text:Remove() end)
+    end
+    targets, drawings = {}, {}
+
+    local seen = {}
+    local all = game.Workspace:GetDescendants()
+    for i = 1, #all do
+        local x = all[i]
+        local part = nil
+
+        local position = x.Position
+        if position and matches(x.Name) then
+            part = x
+        end
+
+        if part and not seen[part.Address] then
+            seen[part.Address] = true
+            targets[#targets + 1] = {part = part, name = part.Name}
+        end
+    end
+
+    for i = 1, #targets do
+        local box = Drawing.new("Square")
+        box.Size = Vector2.new(20, 20)
+        box.Color = Color3.fromRGB(255, 180, 50)
+        box.Thickness = 2
+        box.Filled = false
+        box.Visible = false
+        box.ZIndex = 10
+
+        local text = Drawing.new("Text")
+        text.Text = targets[i].name
+        text.Size = 14
+        text.Color = Color3.fromRGB(255, 220, 90)
+        text.Outline = true
+        text.Center = true
+        text.Visible = false
+        text.ZIndex = 11
+        drawings[i] = {box = box, text = text}
+    end
+end
+
+rebuild()
+
+local conn
+conn = RunService.RenderStepped:Connect(function()
+    if not alive then return end
+    for i = 1, #targets do
+        local d = drawings[i]
+        if d and d.box and d.text and targets[i] and targets[i].part then
+            local screen, visible = WorldToScreen(targets[i].part.Position + Vector3.new(0, 2, 0))
+            d.box.Visible = visible
+            d.text.Visible = visible
+            if visible then
+                d.box.Position = Vector2.new(screen.X - 10, screen.Y - 10)
+                d.text.Position = Vector2.new(screen.X, screen.Y - 28)
+            end
+        end
+    end
+end)
+
+task.spawn(function()
+    while alive do
+        task.wait(5)
+        if alive then rebuild() end
+    end
+end)
+
+local function stop()
+    alive = false
+    if conn then conn:Disconnect() end
+    _G.Person299QuestESPStop = nil
+    for i = 1, #drawings do
+        pcall(function() drawings[i].box:Remove() end)
+        pcall(function() drawings[i].text:Remove() end)
+    end
+end
+
+_G.Person299QuestESPStop = stop
+print("Person299 quest ESP loaded")
+
