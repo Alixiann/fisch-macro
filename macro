@@ -40,6 +40,7 @@
   local toggleInstant
   local toggleMacro
   local toggleHarpoonPull
+  local syncRobloxInput
   local held, wasReeling = false, false
   local equipPending = false
   local equipReadyAt = 0
@@ -192,6 +193,13 @@
       page = 1,
       pageSize = 6,
       top = 420,
+      drawings = {},
+      slots = {}
+  }
+  islandMenu.crates = {
+      open = false,
+      anim = 0,
+      top = 452,
       drawings = {},
       slots = {}
   }
@@ -403,7 +411,7 @@
       npcMenuDrawings[d] = y
       return d
   end
-  -- Keep the dropdown in clear sections: GPS, NPCs, Totems, and Islands.
+  -- Keep the dropdown in clear sections: GPS, NPCs, Totems, Islands, and Crates.
   local npcRows = {
       {name = "Merlin", aliases = {"merlin"}, y = 506, pos = {-943, 224, -988}},
       {name = "Astronomer Vega", aliases = {"astronomervega", "vega"}, y = 534, preferHead = true, pos = {-1957, 227, -465}, exactPosition = true},
@@ -449,6 +457,14 @@
       {name = "The Depths", pos = {980, -710, 1320}},
       {name = "Tidefall", pos = {3223, 130, 850}},
   }
+  islandMenu.crates.rows = {
+      {name = "Bait Crate", pos = {374, 138, 281}},
+      {name = "Coral Geode", pos = {-1645, -210, -2855}},
+      {name = "Metal Strongbox", pos = {3165, -1100, 780}},
+      {name = "Quality Baitcrate", pos = {-220, 134, 1890}},
+      {name = "Tropical Baitcrate", pos = {-924, 131, -1103}},
+      {name = "Volcanic Geode", pos = {-5080, 145, -1510}},
+  }
   local function ensureTeleportHeaders()
       if teleportHeadersBuilt then return end
       totemMenu.title = label("Totems", 14, 396, 11)
@@ -457,6 +473,9 @@
       islandMenu.title = label("Islands", 14, 428, 11)
       islandMenu.title.Color = C.pink
       islandMenu.arrow = label("v", PANEL_W - 24, 426, 14)
+      islandMenu.crates.title = label("Crates", 14, 460, 11)
+      islandMenu.crates.title.Color = C.blue
+      islandMenu.crates.arrow = label("v", PANEL_W - 24, 458, 14)
       teleportHeadersBuilt = true
   end
   local function ensureNpcMenuDrawings()
@@ -536,6 +555,23 @@
       islandMenu.next = islandLabel("Next >", 213, 204, 11, C.cyan)
       islandMenu.status = islandLabel("Click to teleport", 14, 229, 10, C.muted)
       islandMenuBuilt = true
+  end
+  islandMenu.crates.ensureDrawings = function()
+      if islandMenu.crates.built then return end
+      ensureNpcMenuDrawings()
+      for i, row in ipairs(islandMenu.crates.rows) do
+          local offset = 38 + (i - 1) * 27
+          local d = label(row.name, 26, islandMenu.crates.top + offset, 12)
+          d.Color = C.white
+          d.Visible = false
+          islandMenu.crates.drawings[d] = offset
+          islandMenu.crates.slots[i] = d
+      end
+      islandMenu.crates.status = label("Click to teleport", 14, islandMenu.crates.top + 204, 10)
+      islandMenu.crates.status.Color = C.muted
+      islandMenu.crates.status.Visible = false
+      islandMenu.crates.drawings[islandMenu.crates.status] = 204
+      islandMenu.crates.built = true
   end
   ensureAutoTotemDrawings = function()
       if autoTotemBuilt then return end
@@ -674,7 +710,6 @@
       local enter = iskeypressed(0x0D) == true
       if enter and not rodSpeed.keys[0x0D] then
           rodSpeed.editing = false
-          pcall(setrobloxinput, true)
           rodSpeed.apply()
       end
       rodSpeed.keys[0x0D] = enter
@@ -685,7 +720,7 @@
       rodSpeed.generation = rodSpeed.generation + 1
       rodSpeed.loading, rodSpeed.enabled = false, false
       rodSpeed.editing, rodSpeed.keys = false, {}
-      pcall(setrobloxinput, true)
+      syncRobloxInput()
       if rodSpeed.cache and not instantEnabled then
           pcall(applygc, rodSpeed.cache, "progressefficiency", rodSpeed.original or 1)
       elseif instantEnabled then
@@ -739,12 +774,19 @@
   local panelInputCaptured = false
   local leftWasDown = false
   guiDragCaptured = false
+  local robloxInputBlocked = false
+  syncRobloxInput = function(force)
+      local block = alive and (guiDragCaptured or customGpsEditing
+          or fishEsp.editing or rodSpeed.editing)
+      if force or block ~= robloxInputBlocked then
+          local ok = pcall(setrobloxinput, not block)
+          if ok then robloxInputBlocked = block end
+      end
+  end
   setGuiDragCapture = function(capture)
       if guiDragCaptured == capture then return end
-      -- Matcha has no ContextActionService binding. Capture only a GUI drag,
-      -- and restore game input on release, hide, focus loss, or unload.
-      local ok = pcall(setrobloxinput, not capture)
-      guiDragCaptured = ok and capture or false
+      guiDragCaptured = capture
+      syncRobloxInput()
   end
   local function activeShakeButton()
       local cache = totemMenu.buttonCache
@@ -1003,7 +1045,7 @@
       )
       local dropdownHeight = math.max(32,
           npcMenuOpen
-              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              and (islandMenu.crates.top + 32 + 221 * islandMenu.crates.anim - 388)
               or (autoTotem.open and 212 or 32)) * uiScale
       local dropdownX = teleportWindow.x or x
       local dropdownY = teleportWindow.y or (y + PANEL_H * uiScale + 8)
@@ -1031,9 +1073,11 @@
       for _, entry in ipairs(layout) do
           local isMenuEntry = npcMenuDrawings[entry.d] or autoTotem.drawings[entry.d]
               or totemMenu.drawings[entry.d]
-              or islandMenu.drawings[entry.d] or entry.d == totemMenu.title
+              or islandMenu.drawings[entry.d] or islandMenu.crates.drawings[entry.d]
+              or entry.d == totemMenu.title
               or entry.d == totemMenu.arrow or entry.d == islandMenu.title
-              or entry.d == islandMenu.arrow
+              or entry.d == islandMenu.arrow or entry.d == islandMenu.crates.title
+              or entry.d == islandMenu.crates.arrow
           local originX = isMenuEntry and dropdownX or x
           local originY = isMenuEntry and (dropdownY - 388 * uiScale) or y
           local drawX, drawY = originX + entry.x * uiScale, originY + entry.y * uiScale
@@ -1075,7 +1119,7 @@
       local x, y = cursor.X, cursor.Y
       local dropdownHeight = math.max(32,
           npcMenuOpen
-              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              and (islandMenu.crates.top + 32 + 221 * islandMenu.crates.anim - 388)
               or (autoTotem.open and 212 or 32)) * uiScale
       local inDropdown = focused and shown and (npcMenuOpen or autoTotem.open)
           and teleportWindow.x and teleportWindow.y
@@ -1167,10 +1211,13 @@
               menuAlpha = totemMenu.anim
           elseif islandMenu.drawings[entry.d] then
               menuAlpha = islandMenu.anim
+          elseif islandMenu.crates.drawings[entry.d] then
+              menuAlpha = islandMenu.crates.anim
           elseif autoTotem.drawings[entry.d] then
               menuAlpha = autoTotem.anim
           elseif entry.d == totemMenu.title or entry.d == totemMenu.arrow
-              or entry.d == islandMenu.title or entry.d == islandMenu.arrow then
+              or entry.d == islandMenu.title or entry.d == islandMenu.arrow
+              or entry.d == islandMenu.crates.title or entry.d == islandMenu.crates.arrow then
               -- These are Teleports-only headers.  Do not leave the Totems
               -- teleport button/header visible over the Auto Totem panel.
               menuAlpha = npcMenuAnim * (autoTotem.open and 0 or 1)
@@ -1380,11 +1427,13 @@
   local function layoutTeleportMenus()
       totemMenu.top = 388 + (npcSubOpen and 368 or 95) * npcMenuAnim
       islandMenu.top = totemMenu.top + 48 + 221 * (totemMenu.open and 1 or 0)
+      islandMenu.crates.top = islandMenu.top + 48 + 221 * (islandMenu.open and 1 or 0)
       autoTotem.top = 420
       npcArrow.Text = npcMenuOpen and "^" or "v"
       if npcSubArrow then npcSubArrow.Text = npcSubOpen and "^" or "v" end
       if totemMenu.arrow then totemMenu.arrow.Text = totemMenu.open and "^" or "v" end
       if islandMenu.arrow then islandMenu.arrow.Text = islandMenu.open and "^" or "v" end
+      if islandMenu.crates.arrow then islandMenu.crates.arrow.Text = islandMenu.crates.open and "^" or "v" end
       autoTotem.arrow.Text = autoTotem.open and "^" or "v"
       local automationOffset = automationMenuOpen and 0 or -141
       -- Fish ESP occupies the 406-470 band.  Keep Auto Totem in its own row
@@ -1421,12 +1470,19 @@
               entry.y = islandMenu.top + 8
           elseif entry.d == islandMenu.arrow then
               entry.y = islandMenu.top + 6
+          elseif entry.d == islandMenu.crates.title then
+              entry.y = islandMenu.crates.top + 8
+          elseif entry.d == islandMenu.crates.arrow then
+              entry.y = islandMenu.crates.top + 6
           elseif autoTotem.drawings[entry.d] then
               entry.y = autoTotem.top + autoTotem.drawings[entry.d]
                   - (1 - autoTotem.anim) * 6
           elseif islandMenu.drawings[entry.d] then
               entry.y = islandMenu.top + islandMenu.drawings[entry.d]
                   - (1 - islandMenu.anim) * 6
+          elseif islandMenu.crates.drawings[entry.d] then
+              entry.y = islandMenu.crates.top + islandMenu.crates.drawings[entry.d]
+                  - (1 - islandMenu.crates.anim) * 6
           elseif npcMenuDrawings[entry.d] then
               entry.y = math.abs(npcMenuDrawings[entry.d])
                   - (1 - npcMenuAnim) * 6
@@ -1467,10 +1523,12 @@
       local npcTarget = npcMenuOpen and 1 or 0
       local totemTarget = totemMenu.open and 1 or 0
       local islandTarget = islandMenu.open and 1 or 0
+      local cratesTarget = islandMenu.crates.open and 1 or 0
       local autoTotemTarget = autoTotem.open and 1 or 0
       if math.abs(npcMenuAnim - npcTarget) < 0.0001
           and math.abs(totemMenu.anim - totemTarget) < 0.0001
           and math.abs(islandMenu.anim - islandTarget) < 0.0001
+          and math.abs(islandMenu.crates.anim - cratesTarget) < 0.0001
           and math.abs(autoTotem.anim - autoTotemTarget) < 0.0001 then
           return
       end
@@ -1478,10 +1536,12 @@
       npcMenuAnim = npcMenuAnim + (npcTarget - npcMenuAnim) * blend
       totemMenu.anim = totemMenu.anim + (totemTarget - totemMenu.anim) * blend
       islandMenu.anim = islandMenu.anim + (islandTarget - islandMenu.anim) * blend
+      islandMenu.crates.anim = islandMenu.crates.anim + (cratesTarget - islandMenu.crates.anim) * blend
       autoTotem.anim = autoTotem.anim + (autoTotemTarget - autoTotem.anim) * blend
       local needsLayout = math.abs(npcMenuAnim - npcTarget) > 0.0001
           or math.abs(totemMenu.anim - totemTarget) > 0.0001
           or math.abs(islandMenu.anim - islandTarget) > 0.0001
+          or math.abs(islandMenu.crates.anim - cratesTarget) > 0.0001
           or math.abs(autoTotem.anim - autoTotemTarget) > 0.0001
       if math.abs(npcMenuAnim - npcTarget) < 0.002 then
           npcMenuAnim = npcTarget
@@ -1491,6 +1551,9 @@
       end
       if math.abs(islandMenu.anim - islandTarget) < 0.002 then
           islandMenu.anim = islandTarget
+      end
+      if math.abs(islandMenu.crates.anim - cratesTarget) < 0.002 then
+          islandMenu.crates.anim = cratesTarget
       end
       if math.abs(autoTotem.anim - autoTotemTarget) < 0.002 then
           autoTotem.anim = autoTotemTarget
@@ -1551,6 +1614,15 @@
       islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
       if not ok then warn("Island teleport: " .. tostring(err)) end
   end
+  islandMenu.crates.teleport = function(row)
+      prepareTeleport()
+      local root = characterRoot(islandMenu.crates.status)
+      if not root then return end
+      local pos = Vector3.new(row.pos[1], row.pos[2], row.pos[3])
+      local ok, err = writeTeleport(root, pos, {0, 0, 0}, 6)
+      islandMenu.crates.status.Text = ok and ("At " .. row.name) or "Teleport write failed"
+      if not ok then warn("Crate teleport: " .. tostring(err)) end
+  end
   local function updateCustomGpsDisplay()
       if not customGpsFallbackText then return end
       customGpsFallbackText.Text = customGpsText ~= "" and customGpsText
@@ -1594,7 +1666,6 @@
       local enter = iskeypressed(0x0D) == true
       if enter and not customGpsKeys[0x0D] then
           customGpsEditing = false
-          pcall(setrobloxinput, true)
       end
       customGpsKeys[0x0D] = enter
       updateCustomGpsDisplay()
@@ -1605,23 +1676,9 @@
   fishEsp.baseFishName = function(value)
       local raw = tostring(value or "")
       -- Live roaming fish models append an instance suffix (for example
-      -- Pike_9 or Bull Shark_6c). Strip only that terminal token.
-      raw = raw:gsub("[_%s]+[%da-fA-F][%da-fA-F]$", "")
-          :gsub("[_%s]+%d+$", "")
+      -- Trout_292 or Anchovy_27e). Strip only that terminal token.
+      raw = raw:gsub("_[%da-fA-F]+$", "")
       return fishEsp.normalize(raw)
-  end
-  fishEsp.distance = function(a, b)
-      local prev = {}
-      for j = 0, #b do prev[j] = j end
-      for i = 1, #a do
-          local cur = {[0] = i}
-          for j = 1, #b do
-              cur[j] = math.min(cur[j - 1] + 1, prev[j] + 1,
-                  prev[j - 1] + (a:sub(i, i) == b:sub(j, j) and 0 or 1))
-          end
-          prev = cur
-      end
-      return prev[#b]
   end
   fishEsp.clearDrawings = function()
       for _, drawing in ipairs(fishEsp.drawings) do pcall(function() drawing:Remove() end) end
@@ -1659,7 +1716,7 @@
           fishEsp.queries, fishEsp.scan = {}, nil
           fishEsp.retryAt = 0
           local query = fishEsp.normalize(fishEsp.text):sub(1, 64)
-          if #query >= 3 and query:find("%a") then
+          if #query > 0 and query:find("%a") then
               fishEsp.queries[1] = query
           end
           fishEsp.queryReady = #fishEsp.queries > 0
@@ -1700,21 +1757,23 @@
           fishEsp.scan = {
               queue = {}, index = 1, targets = {},
               seen = {}, names = {}, root = scanRoots[1],
+              startedAt = now,
           }
           for _, root in ipairs(scanRoots) do
-              fishEsp.scan.queue[#fishEsp.scan.queue + 1] = {object = root}
+              fishEsp.scan.queue[#fishEsp.scan.queue + 1] = {
+                  object = root, depth = 0
+              }
           end
       end
       local scan = fishEsp.scan
       fishEsp.status.Text = "Scanning roaming fish..."
-      for step = 1, (panelInputCaptured or dragging) and 1 or 4 do
+      for step = 1, 4 do
           local item = scan.queue[scan.index]
           if not item then
               fishEsp.setTargets(scan.targets)
-              fishEsp.status.Text = #scan.targets .. " fish | "
-                  .. "roaming | refresh 5s"
+              fishEsp.status.Text = #scan.targets .. " fish | 700 studs | 5s"
               fishEsp.scan = nil
-              fishEsp.retryAt = now + 5
+              fishEsp.retryAt = scan.startedAt + 5
               return
           end
           scan.queue[scan.index] = false
@@ -1732,13 +1791,13 @@
               if isPart then
                   part = object
               elseif class == "Model" then
-                  part = object.PrimaryPart or object:FindFirstChild("Hitbox")
+                  -- Category models have no direct fish part. Do not use
+                  -- PrimaryPart here: Matcha can return an invalid wrapper,
+                  -- which used to abort the scan before reaching the fish.
+                  part = object:FindFirstChild("Hitbox")
                       or object:FindFirstChild("Center")
               end
-              if class == "Model" and not part then
-                  part = object:FindFirstChildWhichIsA("BasePart", true)
-              end
-              local inRange = not part or (part.Position - origin).Magnitude <= 670
+              local inRange = not part or (part.Position - origin).Magnitude <= 700
               if not container and not inRange then return end
               local matches = scan.names[name]
               if class == "Folder" or not inRange then matches = false end
@@ -1746,17 +1805,9 @@
                   matches = false
                   local normalized = fishEsp.baseFishName(name)
                   for _, query in ipairs(fishEsp.queries) do
-                      if normalized == query or (#query >= 3 and normalized:find(query, 1, true)) then
+                      if normalized == query then
                           matches = true
                           break
-                      end
-                      if #query >= 3 and #normalized <= 64 then
-                          local limit = math.min(2, math.max(1, math.floor(#query * 0.25)))
-                          if math.abs(#normalized - #query) <= limit
-                              and fishEsp.distance(query, normalized) <= limit then
-                              matches = true
-                              break
-                          end
                       end
                   end
                   scan.names[name] = matches
@@ -1764,10 +1815,13 @@
               if matches and not owner and (class == "Model" or isPart) then
                   owner, ownerName = object, name
               end
+              if matches and class == "Model" and not part then
+                  part = object:FindFirstChildWhichIsA("BasePart", true)
+              end
               local stableKey = owner and (owner:GetFullName() or ownerName)
               if part and owner and stableKey and not scan.seen[stableKey] and #scan.targets < 64 then
                   local position = part.Position
-                      if (position - origin).Magnitude <= 670 then
+                      if (position - origin).Magnitude <= 700 then
                       scan.seen[stableKey] = true
                       scan.targets[#scan.targets + 1] = {
                           model = owner, part = part, name = ownerName,
@@ -1780,11 +1834,14 @@
                       end
                   end
               end
-              if container then
+              -- roamingFish contains category models, then fish models.
+              -- The fish parts do not need a further tree scan.
+              if container and (item.depth or 0) < 2 then
                   local children = object:GetChildren()
                   for i, child in ipairs(children) do
                       scan.queue[#scan.queue + 1] = {
                           object = child, owner = owner, ownerName = ownerName,
+                          depth = (item.depth or 0) + 1,
                       }
                       if i % 16 == 0 then
                           task.wait(0.01)
@@ -1816,7 +1873,7 @@
           local keep = false
           pcall(function()
                   keep = entry.model.Parent and entry.part.Parent
-                      and (entry.part.Position - origin).Magnitude <= 670
+                      and (entry.part.Position - origin).Magnitude <= 700
           end)
           if keep then activeTargets[#activeTargets + 1] = entry end
       end
@@ -1841,7 +1898,7 @@
               end
               local position = entry.part.Position
               local distance = (position - origin).Magnitude
-               if distance > 670 then
+               if distance > 700 then
                   if drawing then drawing.Visible = false end
                   return
               end
@@ -1890,7 +1947,6 @@
       local enter = iskeypressed(0x0D) == true
       if enter and not fishEsp.keys[0x0D] then
           fishEsp.editing = false
-          pcall(setrobloxinput, true)
       end
       fishEsp.keys[0x0D] = enter
       fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
@@ -1940,7 +1996,7 @@
       prepareTeleport()
       local text = customGpsText
       customGpsEditing = false
-      pcall(setrobloxinput, true)
+      syncRobloxInput()
       local numbers = {}
       for value in text:gmatch("[%-+]?%d+%.?%d*") do
           numbers[#numbers + 1] = tonumber(value)
@@ -1965,6 +2021,7 @@
           customGpsEditing = false
           leftWasDown = false
           releasePanelInput()
+          syncRobloxInput()
           return
       end
       local x, y = cursor.X, cursor.Y
@@ -1972,7 +2029,7 @@
       local dropdownY = teleportWindow.y
       local dropdownHeight = math.max(32,
           npcMenuOpen
-              and (islandMenu.top + 32 + 221 * islandMenu.anim - 388)
+              and (islandMenu.crates.top + 32 + 221 * islandMenu.crates.anim - 388)
               or (autoTotem.open and 212 or 32)) * uiScale
       local insideMain = lastPanelX and lastPanelY
           and type(x) == "number" and type(y) == "number"
@@ -2011,7 +2068,6 @@
       pcall(rodSpeed.updateTyping)
       if not pcall(fishEsp.updateTyping) then
           fishEsp.editing = false
-          pcall(setrobloxinput, true)
       end
       if insideMain and not dragging and down and not leftWasDown
           and localY >= 211 and localY <= 238 then
@@ -2022,12 +2078,10 @@
        if fishEsp.editing and down and not leftWasDown
            and not (inside and contentY >= 420 and contentY < 446) then
           fishEsp.editing = false
-          pcall(setrobloxinput, true)
       end
        if rodSpeed.editing and down and not leftWasDown
            and not (inside and contentY >= 367 and contentY < 391) then
           rodSpeed.editing = false
-          pcall(setrobloxinput, true)
       end
       if inside and not dragging and down and not leftWasDown
           and automationMenuOpen
@@ -2068,7 +2122,6 @@
        if customGpsEditing and down and not leftWasDown
            and not (inside and localY >= 406 and localY < 430) then
           customGpsEditing = false
-          pcall(setrobloxinput, true)
       end
       if inside and not dragging and down and not leftWasDown
           and automationMenuOpen
@@ -2115,8 +2168,8 @@
               if autoTotem.open then ensureAutoTotemDrawings() end
               npcMenuOpen = false
               npcSubOpen = false
-              totemMenu.open, islandMenu.open = false, false
-              totemMenu.anim, islandMenu.anim = 0, 0
+              totemMenu.open, islandMenu.open, islandMenu.crates.open = false, false, false
+              totemMenu.anim, islandMenu.anim, islandMenu.crates.anim = 0, 0, 0
               if not autoTotem.open then autoTotem.anim = 0 end
               layoutTeleportMenus()
           elseif insideMain
@@ -2125,7 +2178,7 @@
               and localY < teleportsTabTop + 23 then
               npcMenuOpen = not npcMenuOpen
               if npcMenuOpen then ensureNpcMenuDrawings() end
-              totemMenu.open, islandMenu.open, autoTotem.open = false, false, false
+              totemMenu.open, islandMenu.open, islandMenu.crates.open, autoTotem.open = false, false, false, false
               autoTotem.anim = 0
               if not npcMenuOpen then customGpsEditing = false end
               layoutTeleportMenus()
@@ -2139,12 +2192,23 @@
           elseif insideDropdown and localY >= 430 and localY < 456 then
               teleportCustomGps()
           elseif insideDropdown and not autoTotem.open
+              and localY >= islandMenu.crates.top and localY < islandMenu.crates.top + 32 then
+              islandMenu.crates.open = not islandMenu.crates.open
+              if islandMenu.crates.open then
+                  islandMenu.crates.ensureDrawings()
+                  totemMenu.open, islandMenu.open = false, false
+                  totemMenu.anim, islandMenu.anim = 0, 0
+              end
+              layoutTeleportMenus()
+          elseif insideDropdown and not autoTotem.open
               and localY >= islandMenu.top and localY < islandMenu.top + 32 then
               islandMenu.open = not islandMenu.open
               if islandMenu.open then
                   ensureIslandMenuDrawings()
                   totemMenu.open = false
                   totemMenu.anim = 0
+                  islandMenu.crates.open = false
+                  islandMenu.crates.anim = 0
               end
               layoutTeleportMenus()
           elseif insideDropdown and not autoTotem.open
@@ -2154,8 +2218,17 @@
                   ensureTotemMenuDrawings()
                   islandMenu.open = false
                   islandMenu.anim = 0
+                  islandMenu.crates.open = false
+                  islandMenu.crates.anim = 0
                end
                layoutTeleportMenus()
+           elseif insideDropdown and not autoTotem.open and islandMenu.crates.open then
+              local offset = localY - islandMenu.crates.top
+              if offset >= 32 and offset < 32 + #islandMenu.crates.rows * 27 then
+                  local slot = math.floor((offset - 32) / 27) + 1
+                  local row = islandMenu.crates.rows[slot]
+                  if row then islandMenu.crates.teleport(row) end
+              end
            elseif insideDropdown and not autoTotem.open and islandMenu.open then
               local offset = localY - islandMenu.top
               if offset >= 198 and offset < 224 then
@@ -2200,6 +2273,7 @@
           end
       end
       leftWasDown = down
+      syncRobloxInput()
   end
   local function numberValue(parent, name)
       local child = parent and parent:FindFirstChild(name)
@@ -3639,6 +3713,9 @@
       setGuiDragCapture(false)
       disableInstant()
       rodSpeed.stop()
+      fishEsp.editing = false
+      customGpsEditing = false
+      syncRobloxInput(true)
       equipPending = false
       dragging = false
       releasePanelInput()
@@ -3708,13 +3785,13 @@
                       fishEsp.editing = false
                       rodSpeed.editing = false
                       customGpsEditing = false
-                      pcall(setrobloxinput, true)
+                      syncRobloxInput(true)
                       releasePanelInput()
                       npcMenuOpen, npcSubOpen = false, false
-                      totemMenu.open, islandMenu.open = false, false
+                      totemMenu.open, islandMenu.open, islandMenu.crates.open = false, false, false
                       autoTotem.open = false
                       npcMenuAnim, totemMenu.anim = 0, 0
-                      islandMenu.anim, autoTotem.anim = 0, 0
+                      islandMenu.anim, islandMenu.crates.anim, autoTotem.anim = 0, 0, 0
                       layoutTeleportMenus()
                   end
   end
@@ -3872,6 +3949,7 @@
               pcall(function()
                   typing = UserInputService:GetFocusedTextBox() ~= nil
               end)
+              typing = typing or customGpsEditing or fishEsp.editing or rodSpeed.editing
               if not typing then
                   pressed = macroCallbacks.edge(AUTO_TOTEM_KEY)
               else
@@ -3901,13 +3979,14 @@
               pcall(function()
                   typing = UserInputService:GetFocusedTextBox() ~= nil
               end)
+              typing = typing or customGpsEditing or fishEsp.editing or rodSpeed.editing
               if typing then
-                  toggle, instantToggle, harpoonToggle = false, false, false
+                  toggle, instantToggle, harpoonToggle, hide = false, false, false, false
               end
               if not focused then
                   navigationWanted = navigationOn
               end
-              if not panelInputCaptured then updateKeys(now) end
+              if not panelInputCaptured and not typing then updateKeys(now) end
               if not macroCallbacks.renderConnection then updateDrag(focused) end
               if hide then macroCallbacks.setShown(not shown) end
               if focused then
@@ -3920,26 +3999,28 @@
                   requestHarpoonToggle()
                end
                updatePanelInput(focused)
+              typing = typing or customGpsEditing or fishEsp.editing or rodSpeed.editing
               macroCallbacks.updateInstant(now, focused)
               macroCallbacks.updateBarLock(now)
                local reelMinigameActive = enabled and focused and not panelInputCaptured
+                   and not typing
                    and fishingMinigameActive()
                local autoTotemBlocking = enabled and (autoTotem.busy
                    or (autoTotem.enabled and not autoTotem.startupConfirmed))
-               if not enabled or not focused or panelInputCaptured
+               if not enabled or not focused or panelInputCaptured or typing
                    or autoTotemBlocking then
                   mouse(false)
                   releaseKey()
                   releaseAt, idleSince = nil, nil
                   recoveryStage = 0
                   resetTracking()
-                  if focused and not panelInputCaptured then
+                  if focused and not panelInputCaptured and not typing then
                       setNavigation(false)
                   end
                    display(not enabled and "OFF"
                        or autoTotem.busy and "AUTO TOTEM"
                        or autoTotemBlocking and "WAITING FOR AURORA"
-                       or panelInputCaptured and "PAUSED / PANEL"
+                       or (panelInputCaptured or typing) and "PAUSED / PANEL"
                        or "PAUSED / UNFOCUSED")
               else
       local reel = gui and (gui:FindFirstChild("reel") or gui:FindFirstChild("Reel"))
@@ -4140,7 +4221,7 @@
                   or dragging or teleportWindow.dragging
               local uiAnimating = dragging or teleportWindow.dragging
                   or npcMenuOpen or autoTotem.open or totemMenu.open
-                  or islandMenu.open
+                  or islandMenu.open or islandMenu.crates.open
               -- Poll visible UI at up to 120 Hz; unchanged geometry is cached.
               -- Decorative color/fade work has its separate 60 Hz budget.
               local loopDelay = shown and 1 / 120
