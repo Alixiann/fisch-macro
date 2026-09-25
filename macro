@@ -33,6 +33,7 @@
   local world = nil
   local alive, enabled, shown = true, false, false
   local harpoonPullEnabled = false
+  local controlBarLockEnabled = false
   local instantEnabled, instantLoading = false, false
   local instantCache, instantOriginal
   local instantGeneration, nextInstant = 0, 0
@@ -333,21 +334,24 @@
   local castModeText = label("Perfect cast OFF", automationX, 317, 10)
   castModeText.Color = C.instantOff
   automationMenuDrawings[castModeText] = true
-  rodSpeed.heading = label("Rod speed", automationX, 339, 10)
+  local controlBarLockText = label("Control Bar Lock OFF", automationX, 339, 10)
+  controlBarLockText.Color = C.instantOff
+  automationMenuDrawings[controlBarLockText] = true
+  rodSpeed.heading = label("Rod speed", automationX, 356, 10)
   rodSpeed.heading.Color = C.yellow
   automationMenuDrawings[rodSpeed.heading] = true
-  rodSpeed.box = add("Square", 12, 354)
+  rodSpeed.box = add("Square", 12, 369)
   rodSpeed.box.Size = Vector2.new(PANEL_W - 24, 22)
   rodSpeed.box.Color = Color3.fromRGB(35, 42, 56)
   rodSpeed.box.Filled = true
   automationMenuDrawings[rodSpeed.box] = true
-  rodSpeed.input = label(rodSpeed.text, 18, 359, 9)
+  rodSpeed.input = label(rodSpeed.text, 18, 374, 9)
   rodSpeed.input.Color = C.white
   automationMenuDrawings[rodSpeed.input] = true
-  rodSpeed.toggle = label("Rod speed OFF", automationX, 382, 10)
+  rodSpeed.toggle = label("Rod speed OFF", automationX, 394, 10)
   rodSpeed.toggle.Color = C.instantOff
   automationMenuDrawings[rodSpeed.toggle] = true
-  rodSpeed.status = label("signed value", 120, 382, 8)
+  rodSpeed.status = label("signed value", 120, 394, 8)
   rodSpeed.status.Color = C.muted
   automationMenuDrawings[rodSpeed.status] = true
   instantCatchNote = label("Catch a fish before Instant Catch", automationX, 276, 7)
@@ -748,7 +752,12 @@
       if now < cache.shakeAt then return cache.shake end
       cache.shakeAt = now + 0.15
       local currentGui = player:FindFirstChildOfClass("PlayerGui")
-      local shakeGui = currentGui and currentGui:FindFirstChild("shakeui")
+      local shakeGui = currentGui and (currentGui:FindFirstChild("shakeui")
+          or currentGui:FindFirstChild("ShakeUI")
+          or currentGui:FindFirstChild("ShakeMinigame"))
+      local broadSearch = shakeGui == nil
+      if not shakeGui then shakeGui = currentGui end
+      if broadSearch then cache.shakeAt = now + 0.50 end
       if not shakeGui then cache.shake = nil; return nil end
       local found
       for _, object in ipairs(shakeGui:GetDescendants()) do
@@ -790,32 +799,82 @@
       cache.shake = found
       return found
   end
+  local HARPOON_SCAN_INTERVAL = 0.02
+  local HARPOON_AIM_DELAY = 0.08
+  local harpoonClickedButtons = {}
   local function activeHarpoonPullButton()
       local cache = totemMenu.buttonCache
       local now = tick()
-      if now < cache.harpoonAt then return cache.harpoon end
-      cache.harpoonAt = now + 0.15
+      if now < cache.harpoonAt then
+          return cache.harpoon, cache.harpoonX, cache.harpoonY, cache.harpoonId
+      end
+      cache.harpoonAt = now + HARPOON_SCAN_INTERVAL
+      cache.harpoon, cache.harpoonX, cache.harpoonY, cache.harpoonId = nil, nil, nil, nil
       local currentGui = player:FindFirstChildOfClass("PlayerGui")
-      if not currentGui then cache.harpoon = nil; return nil end
+      if not currentGui then return nil end
       local minigame = currentGui:FindFirstChild("harpoonMinigame")
-      local safezone = minigame and minigame:FindFirstChild("safezone")
-      if not safezone then cache.harpoon = nil; return nil end
-      local found
-      for _, object in ipairs(safezone:GetChildren()) do
-          local objectName = tostring(object.Name):lower()
-          if object.ClassName == "ImageButton" and objectName:find("pull", 1, true) then
-              local ok, size = pcall(function() return object.AbsoluteSize end)
-              if ok and size and size.X > 8 and size.Y > 8 then
-                  local title = object:FindFirstChild("title")
-                  local textOk, text = pcall(function() return title and title.Text end)
-                  local normalized = textOk and type(text) == "string"
-                      and text:upper():gsub("[^%a]", "") or ""
-                  if normalized == "PULL" then found = object end
+          or currentGui:FindFirstChild("HarpoonMinigame")
+          or currentGui:FindFirstChild("HarpoonGunMobile")
+      if not minigame then
+          for id in pairs(harpoonClickedButtons) do harpoonClickedButtons[id] = nil end
+          return nil
+      end
+      local safezone = minigame and (minigame:FindFirstChild("safezone")
+          or minigame:FindFirstChild("container"))
+      if not safezone then return nil end
+
+      -- Live pull circles are direct safezone children. The similarly named
+      -- entries under buttonTemplates are hidden clones and must be ignored.
+      local seenButtons = {}
+      local nextButton, nextX, nextY, nextId
+      for _, button in ipairs(safezone:GetChildren()) do
+          if button.ClassName == "ImageButton"
+              and tostring(button.Name):lower() == "pull" then
+              local buttonId
+              pcall(function() buttonId = tostring(button.Address) end)
+              if not buttonId or buttonId == "nil" then
+                  buttonId = tostring(button:GetFullName())
+                      .. ":" .. tostring(button.AbsolutePosition.X)
+                      .. ":" .. tostring(button.AbsolutePosition.Y)
+              end
+              seenButtons[buttonId] = true
+              local title = button:FindFirstChild("title")
+              local titleText = ""
+              pcall(function() titleText = tostring(title and title.Text or "") end)
+              local normalized = titleText:upper():gsub("[^%a]", "")
+              if normalized:sub(1, 4) == "PULL"
+                  and not harpoonClickedButtons[buttonId]
+                  and not nextButton then
+                      local position, size, titlePosition
+                      pcall(function()
+                          position = button.AbsolutePosition
+                          size = button.AbsoluteSize
+                          titlePosition = title and title.AbsolutePosition
+                      end)
+                      if position then
+                          local x, y
+                          if size and size.X > 8 and size.Y > 8 then
+                              x, y = position.X + size.X / 2, position.Y + size.Y / 2
+                          elseif titlePosition then
+                              -- Matcha returns a zero AbsoluteSize for these
+                              -- live buttons; use the moving title as fallback.
+                              x, y = titlePosition.X + 16, titlePosition.Y + 8
+                          else
+                              x, y = position.X + 24, position.Y + 24
+                          end
+                          nextButton, nextX, nextY, nextId = button, x, y, buttonId
+                      end
               end
           end
       end
-      cache.harpoon = found
-      return found
+      -- A clicked circle stays in the GUI briefly. Keep its ID blocked while
+      -- present, then release the ID so a later circle can reuse that address.
+      for id in pairs(harpoonClickedButtons) do
+          if not seenButtons[id] then harpoonClickedButtons[id] = nil end
+      end
+      cache.harpoon, cache.harpoonX, cache.harpoonY, cache.harpoonId =
+          nextButton, nextX, nextY, nextId
+      return nextButton, nextX, nextY, nextId
   end
   local function moveMouseFast(x, y)
       if type(mousemoveabs) == "function" then
@@ -832,68 +891,98 @@
   end
   local lastShakeX, lastShakeY
   local lastShakeMoveAt = tick()
-  local harpoonNextClickAt = 0
-  local harpoonReadyAt = 0
+  local harpoonAimReadyAt = 0
+  local harpoonAimId
   task.spawn(function()
       while alive do
           if (enabled or harpoonPullEnabled) and not panelInputCaptured then
               local isHarpoonButton = harpoonPullEnabled
-              local button = harpoonPullEnabled and activeHarpoonPullButton()
-                  or (enabled and activeShakeButton())
+              local button, buttonX, buttonY, buttonId
+              if isHarpoonButton then
+                  button, buttonX, buttonY, buttonId = activeHarpoonPullButton()
+              elseif enabled then
+                  button = activeShakeButton()
+              end
               if button then
-                  local buttonX, buttonY
-                  local didClick = false
-                  pcall(function()
-                      local p, size = button.AbsolutePosition, button.AbsoluteSize
-                      local x, y = p.X + size.X / 2, p.Y + size.Y / 2
-                      buttonX, buttonY = x, y
-                      moveMouseFast(x, y)
-                      if isHarpoonButton then
-                          task.wait(0.01)
-                          moveMouseFast(x, y)
-                          if tick() >= harpoonNextClickAt and harpoonReadyAt == 0 then
-                              harpoonReadyAt = tick() + 0.1
+                  if not isHarpoonButton then
+                      pcall(function()
+                          local p, size = button.AbsolutePosition, button.AbsoluteSize
+                          if p and size and size.X > 8 and size.Y > 8 then
+                              buttonX, buttonY = p.X + size.X / 2, p.Y + size.Y / 2
                           end
-                      end
-                      if not isHarpoonButton
-                          or (tick() >= harpoonNextClickAt and tick() >= harpoonReadyAt) then
-                          didClick = true
-                          if isHarpoonButton then
-                              pcall(mouse1click)
-                          else
-                              pcall(mouse1press)
-                              task.wait(0.02)
-                              pcall(mouse1release)
-                              VirtualInputManager:SendMouseButtonEvent(
-                                  x, y, 0, true, player, 0)
-                              VirtualInputManager:SendMouseButtonEvent(
-                                  x, y, 0, false, player, 0)
-                          end
-                      end
-                  end)
+                      end)
+                  end
                   if buttonX then
-                      if isHarpoonButton and didClick then
-                          harpoonNextClickAt = tick() + 0.05
-                          harpoonReadyAt = 0
+                      moveMouseFast(buttonX, buttonY)
+                      if isHarpoonButton then
+                          if buttonId ~= harpoonAimId then
+                              harpoonAimId = buttonId
+                              harpoonAimReadyAt = tick() + HARPOON_AIM_DELAY
+                          elseif tick() >= harpoonAimReadyAt then
+                              -- Recheck the live list at click time; circles
+                              -- can move or be replaced during the aim wait.
+                              totemMenu.buttonCache.harpoonAt = 0
+                              local _, freshX, freshY, freshId =
+                                  activeHarpoonPullButton()
+                              if freshId ~= buttonId then
+                                  harpoonAimId = nil
+                                  harpoonAimReadyAt = 0
+                              else
+                                  moveMouseFast(freshX, freshY)
+                                  local clickOk = pcall(mouse1click)
+                                  if clickOk then
+                                      harpoonClickedButtons[buttonId] = true
+                                      harpoonAimId = nil
+                                      harpoonAimReadyAt = 0
+                                      local cache = totemMenu.buttonCache
+                                      cache.harpoon, cache.harpoonX, cache.harpoonY, cache.harpoonId = nil, nil, nil, nil
+                                      cache.harpoonAt = 0
+                                  else
+                                      harpoonAimReadyAt = tick() + 0.20
+                                  end
+                              end
+                          end
+                      else
+                          pcall(mouse1press)
+                          pcall(mouse1release)
+                          pcall(function()
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  buttonX, buttonY, 0, true, player, 0)
+                              VirtualInputManager:SendMouseButtonEvent(
+                                  buttonX, buttonY, 0, false, player, 0)
+                          end)
                       end
-                      if not lastShakeX
-                          or math.abs(buttonX - lastShakeX) > 2
-                          or math.abs(buttonY - lastShakeY) > 2 then
-                          lastShakeX, lastShakeY = buttonX, buttonY
-                          lastShakeMoveAt = tick()
-                      elseif tick() - lastShakeMoveAt >= 1 then
-                          moveMouseFast(buttonX + 3, buttonY)
-                          task.wait(0.02)
-                          moveMouseFast(buttonX, buttonY)
-                          lastShakeMoveAt = tick()
+                      if not isHarpoonButton then
+                          if not lastShakeX
+                              or math.abs(buttonX - lastShakeX) > 2
+                              or math.abs(buttonY - lastShakeY) > 2 then
+                              lastShakeX, lastShakeY = buttonX, buttonY
+                              lastShakeMoveAt = tick()
+                          elseif tick() - lastShakeMoveAt >= 1 then
+                              moveMouseFast(buttonX + 3, buttonY)
+                              task.wait(0.02)
+                              moveMouseFast(buttonX, buttonY)
+                              lastShakeMoveAt = tick()
+                          end
                       end
                   end
-                  task.wait(isHarpoonButton and 0.1 or 0.06)
+                  task.wait(isHarpoonButton and HARPOON_SCAN_INTERVAL or 0.06)
               else
-                  task.wait(0.03)
+                  if harpoonPullEnabled then
+                      harpoonAimId = nil
+                      harpoonAimReadyAt = 0
+                  end
+                  task.wait(harpoonPullEnabled and HARPOON_SCAN_INTERVAL or 0.03)
               end
           else
-              task.wait(0.50)
+              if harpoonPullEnabled then
+                  activeHarpoonPullButton()
+                  harpoonAimId = nil
+                  harpoonAimReadyAt = 0
+                  task.wait(HARPOON_SCAN_INTERVAL)
+              else
+                  task.wait(0.50)
+              end
           end
       end
   end)
@@ -1122,13 +1211,31 @@
       end
   end
   local function castReading()
-      if not castMeter then
+      if not (castMeter and castMeter.Parent and castFill and castFill.Parent) then
+          castMeter, castFill, castGreen = nil, nil, nil
           local character = player.Character
           local root = character and character:FindFirstChild("HumanoidRootPart")
           local power = root and root:FindFirstChild("power")
-          castMeter = power and power:FindFirstChild("powerbar")
-          castFill = castMeter and castMeter:FindFirstChild("bar")
-          castGreen = castMeter and castMeter:FindFirstChild("green")
+          castMeter = power and (power:FindFirstChild("powerbar")
+              or power:FindFirstChild("PowerBar") or power:FindFirstChild("bar"))
+          if not castMeter then
+              local currentGui = player:FindFirstChild("PlayerGui")
+              for _, object in ipairs(currentGui and currentGui:GetDescendants() or {}) do
+                  local name = tostring(object.Name):lower()
+                  if (name == "powerbar" or name == "castbar")
+                      and (object.ClassName == "Frame" or object.ClassName == "ImageLabel") then
+                      castMeter = object
+                      break
+                  end
+              end
+          end
+          local castBar = castMeter and castMeter:FindFirstChild("bar")
+          castFill = castBar and (castBar:FindFirstChild("fill")
+              or castBar:FindFirstChild("Fill") or castBar)
+              or castMeter and (castMeter:FindFirstChild("fill")
+                  or castMeter:FindFirstChild("Fill"))
+          castGreen = castMeter and (castMeter:FindFirstChild("green")
+              or castMeter:FindFirstChild("perfect") or castMeter:FindFirstChild("Perfect"))
       end
       if not (castMeter and castFill) then return nil end
       local visible = true
@@ -1140,7 +1247,7 @@
       local fillSize = castFill.AbsoluteSize
       if not (size and origin and fillSize) or size.Y <= 0 then return nil end
       local amount = math.clamp(fillSize.Y / size.Y, 0, 1)
-      if not castGreen then return amount * 100, false end
+      if not castGreen then return amount * 100, amount >= 0.98 end
       local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
       if not (greenSize and greenPos) or greenSize.Y <= 0 then
           return amount * 100, false
@@ -1492,8 +1599,16 @@
       customGpsKeys[0x0D] = enter
       updateCustomGpsDisplay()
   end
-  fishEsp.normalize = function(value)
-      return tostring(value or ""):lower():gsub("[^%w]", "")
+      fishEsp.normalize = function(value)
+          return tostring(value or ""):lower():gsub("[^%w]", "")
+      end
+  fishEsp.baseFishName = function(value)
+      local raw = tostring(value or "")
+      -- Live roaming fish models append an instance suffix (for example
+      -- Pike_9 or Bull Shark_6c). Strip only that terminal token.
+      raw = raw:gsub("[_%s]+[%da-fA-F][%da-fA-F]$", "")
+          :gsub("[_%s]+%d+$", "")
+      return fishEsp.normalize(raw)
   end
   fishEsp.distance = function(a, b)
       local prev = {}
@@ -1530,7 +1645,7 @@
       fishEsp.targets, fishEsp.liveSeen = {}, {}
       for _, entry in ipairs(targets) do
           fishEsp.targets[#fishEsp.targets + 1] = entry
-          fishEsp.liveSeen[entry.model] = true
+          fishEsp.liveSeen[entry.key or entry.name] = true
       end
       fishEsp.renderIndex = 0
       for i = #targets + 1, #fishEsp.drawings do
@@ -1563,10 +1678,11 @@
           fishEsp.nextAreaCheck = now + 5
           local active = W:FindFirstChild("active")
           local roaming = active and active:FindFirstChild("roamingFish")
+          local roamingKey = roaming and roaming:GetFullName()
           local moved = fishEsp.areaOrigin and (origin - fishEsp.areaOrigin).Magnitude >= 250
-          if roaming ~= fishEsp.areaFolder or moved then
+          if roamingKey ~= fishEsp.areaFolderKey or moved then
               fishEsp.scan = nil
-              fishEsp.areaFolder, fishEsp.areaOrigin = roaming, origin
+              fishEsp.areaFolderKey, fishEsp.areaOrigin = roamingKey, origin
           elseif not fishEsp.areaOrigin then
               fishEsp.areaOrigin = origin
           end
@@ -1628,7 +1744,7 @@
               if class == "Folder" or not inRange then matches = false end
               if matches == nil then
                   matches = false
-                  local normalized = fishEsp.normalize(name)
+                  local normalized = fishEsp.baseFishName(name)
                   for _, query in ipairs(fishEsp.queries) do
                       if normalized == query or (#query >= 3 and normalized:find(query, 1, true)) then
                           matches = true
@@ -1648,16 +1764,18 @@
               if matches and not owner and (class == "Model" or isPart) then
                   owner, ownerName = object, name
               end
-              if part and owner and not scan.seen[owner] and #scan.targets < 64 then
+              local stableKey = owner and (owner:GetFullName() or ownerName)
+              if part and owner and stableKey and not scan.seen[stableKey] and #scan.targets < 64 then
                   local position = part.Position
                       if (position - origin).Magnitude <= 670 then
-                      scan.seen[owner] = true
+                      scan.seen[stableKey] = true
                       scan.targets[#scan.targets + 1] = {
-                          model = owner, part = part, name = ownerName, fixedPart = true,
+                          model = owner, part = part, name = ownerName,
+                          key = stableKey, fixedPart = true,
                       }
                       fishEsp.liveSeen = fishEsp.liveSeen or {}
-                      if not fishEsp.liveSeen[owner] and #fishEsp.targets < 64 then
-                          fishEsp.liveSeen[owner] = true
+                      if not fishEsp.liveSeen[stableKey] and #fishEsp.targets < 64 then
+                          fishEsp.liveSeen[stableKey] = true
                           fishEsp.targets[#fishEsp.targets + 1] = scan.targets[#scan.targets]
                       end
                   end
@@ -1810,13 +1928,13 @@
       task.wait(fishEsp.enabled and fishEsp.queryReady and 0.08 or 0.75)
       end
   end)
-  task.spawn(function()
-      while alive do
-          if fishEsp.enabled then
+  pcall(function()
+      local RunService = game:GetService("RunService")
+      fishEsp.renderConnection = RunService.RenderStepped:Connect(function()
+          if alive and fishEsp.enabled then
               pcall(fishEsp.update, tick())
           end
-      task.wait(fishEsp.enabled and fishEsp.queryReady and 1 / 30 or 0.75)
-      end
+      end)
   end)
   local function teleportCustomGps()
       prepareTeleport()
@@ -1907,13 +2025,13 @@
           pcall(setrobloxinput, true)
       end
        if rodSpeed.editing and down and not leftWasDown
-           and not (inside and contentY >= 352 and contentY < 378) then
+           and not (inside and contentY >= 367 and contentY < 391) then
           rodSpeed.editing = false
           pcall(setrobloxinput, true)
       end
       if inside and not dragging and down and not leftWasDown
           and automationMenuOpen
-          and contentY >= 352 and contentY < 378 then
+          and contentY >= 367 and contentY < 391 then
           if rodSpeed.text == "50" then rodSpeed.text = "" end
           rodSpeed.editing = true
           rodSpeed.keys = {}
@@ -1932,8 +2050,19 @@
       end
       if inside and not dragging and down and not leftWasDown
           and automationMenuOpen
-          and contentY >= 378 and contentY <= 403 then
+          and contentY >= 391 and contentY <= 405 then
           rodSpeed.toggleEnabled()
+          releasePanelInput()
+      end
+      if inside and not dragging and down and not leftWasDown
+          and automationMenuOpen
+          and localX >= 10 and localX <= 147
+          and contentY >= 334 and contentY < 356 then
+          controlBarLockEnabled = not controlBarLockEnabled
+          controlBarLockText.Text = controlBarLockEnabled
+              and "Control Bar Lock ON" or "Control Bar Lock OFF"
+          controlBarLockText.Color = controlBarLockEnabled
+              and C.instantOn or C.instantOff
           releasePanelInput()
       end
        if customGpsEditing and down and not leftWasDown
@@ -1944,7 +2073,7 @@
       if inside and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
-          and contentY >= 311 and contentY <= 334 then
+          and contentY >= 311 and contentY < 334 then
           castMode = castMode == "Perfect" and "Instant" or "Perfect"
           castModeText.Text = castMode == "Perfect"
               and "Perfect cast ON" or "Perfect cast OFF"
@@ -2115,7 +2244,7 @@
   end
   fishingMinigameActive = function()
       gui = player and player:FindFirstChild("PlayerGui") or gui
-      local reel = gui and gui:FindFirstChild("reel")
+      local reel = gui and (gui:FindFirstChild("reel") or gui:FindFirstChild("Reel"))
       local bar = reel and reel:FindFirstChild("bar")
       local fish = bar and bar:FindFirstChild("fish")
       local playerbar = bar and bar:FindFirstChild("playerbar")
@@ -2916,7 +3045,7 @@
       -- shake UI in that mode; there is no fishing cycle to wait for.
       if not enabled then return false end
       gui = player and player:FindFirstChild("PlayerGui") or gui
-      local reel = gui and gui:FindFirstChild("reel")
+      local reel = gui and (gui:FindFirstChild("reel") or gui:FindFirstChild("Reel"))
       local bar = reel and reel:FindFirstChild("bar")
       local fish = bar and bar:FindFirstChild("fish")
       local playerbar = bar and bar:FindFirstChild("playerbar")
@@ -3341,8 +3470,8 @@
   toggleHarpoonPull = function()
       harpoonPullEnabled = not harpoonPullEnabled
       if not harpoonPullEnabled then
-          harpoonNextClickAt = 0
-          harpoonReadyAt = 0
+          harpoonAimReadyAt = 0
+          harpoonAimId = nil
       end
       harpoonPullText.Text = harpoonPullEnabled and "Harpoon Pull ON" or "Harpoon Pull OFF"
       harpoonPullText.Color = harpoonPullEnabled and C.instantOn or C.instantOff
@@ -3365,7 +3494,8 @@
       if not instantEnabled or not focused or now < nextInstant then return end
       nextInstant = now + 0.05
       local currentGui = player:FindFirstChild("PlayerGui")
-      local reel = currentGui and currentGui:FindFirstChild("reel")
+      local reel = currentGui and (currentGui:FindFirstChild("reel")
+          or currentGui:FindFirstChild("Reel"))
       local character = player.Character
       local harpoon = character and (character:GetAttribute("HarpoonMinigameActive")
           or character:GetAttribute("HarpoonMinigame"))
@@ -3377,9 +3507,129 @@
           end
       end
   end
+  local barLockMethodCache, barLockFishCache, barLockReelId
+  local barLockMethodLoading, barLockFishLoading = false, false
+  local barLockMethodApplied = false
+  local barLockFishGeneration = 0
+  local barLockScanAt, barLockWriteAt = 0, 0
+  local function normalIsInBar(self, fishPosition, fishWidth)
+      if self.barSize <= 0 then return false end
+      local halfFishWidth = (fishWidth or 0) / 2
+      return self.barPosition - self.barSize / 2 - halfFishWidth
+              < fishPosition
+          and fishPosition < self.barPosition + self.barSize / 2
+              + halfFishWidth
+  end
+  local function restoreBarLock()
+      if barLockMethodApplied and barLockMethodCache then
+          pcall(applygc, barLockMethodCache, "IsInBar", normalIsInBar)
+      end
+      barLockMethodApplied = false
+  end
+  macroCallbacks.updateBarLock = function(now)
+      if not controlBarLockEnabled then
+          restoreBarLock()
+          return
+      end
+      if type(getgc) ~= "function" or type(applygc) ~= "function" then
+          return
+      end
+      if not barLockMethodCache and not barLockMethodLoading then
+          barLockMethodLoading = true
+          task.spawn(function()
+              local ok, cache = pcall(getgc, "IsInBar")
+              barLockMethodLoading = false
+              if alive and ok and type(cache) == "table" and #cache > 0 then
+                  barLockMethodCache = cache
+              end
+          end)
+      end
+      if barLockMethodCache and not barLockMethodApplied then
+          local ok, writes = pcall(applygc, barLockMethodCache,
+              "IsInBar", function() return true end)
+          barLockMethodApplied = ok and type(writes) == "number"
+              and writes > 0
+      end
+      if not barLockMethodApplied then return end
+      local currentGui = player:FindFirstChild("PlayerGui")
+      local reel = currentGui and (currentGui:FindFirstChild("reel")
+          or currentGui:FindFirstChild("Reel"))
+      local bar = reel and reel:FindFirstChild("bar")
+      local playerbar = bar and bar:FindFirstChild("playerbar")
+      if not playerbar then
+          if barLockReelId then
+              barLockFishGeneration = barLockFishGeneration + 1
+              barLockReelId, barLockFishCache, barLockFishLoading =
+                  nil, nil, false
+          end
+          return
+      end
+      local reelId = tostring(reel.Address)
+      if reelId ~= barLockReelId then
+          barLockFishGeneration = barLockFishGeneration + 1
+          barLockReelId, barLockFishCache, barLockFishLoading =
+              reelId, nil, false
+          barLockScanAt = 0
+      end
+      if not barLockFishCache and not barLockFishLoading
+          and now >= barLockScanAt then
+          barLockFishLoading = true
+          barLockScanAt = now + 1
+          local generation = barLockFishGeneration
+          task.spawn(function()
+              local ok, cache = pcall(getgc, "fishPosition")
+              if not alive or generation ~= barLockFishGeneration then return end
+              barLockFishLoading = false
+              if ok and type(cache) == "table" and #cache > 0 then
+                  barLockFishCache = cache
+              end
+          end)
+      end
+      if not barLockFishCache or now < barLockWriteAt then return end
+      local ok, playerCenter = pcall(function()
+          -- Matcha reports 0x0 AbsoluteSize for the live reel GUI. Read
+          -- Position.X.Scale the same way as the reference Lock Bar script.
+          local position = playerbar.Position
+          if position and position.X
+              and type(position.X.Scale) == "number" then
+              return position.X.Scale
+          end
+          if type(memory_read) == "function" then
+              local address = tonumber(playerbar.Address)
+              if address then
+                  local readOk, scale = pcall(memory_read, "float",
+                      address + 1296)
+                  if readOk and type(scale) == "number"
+                      and scale == scale and scale >= 0 and scale <= 1 then
+                      return scale
+                  end
+              end
+          end
+          local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
+          local playerPos, playerSize = playerbar.AbsolutePosition,
+              playerbar.AbsoluteSize
+          if origin and size and playerPos and size.X > 0 then
+              return (playerPos.X + (playerSize and playerSize.X or 0) / 2
+                  - origin.X) / size.X
+          end
+      end)
+      if not ok or not playerCenter or playerCenter ~= playerCenter
+          or playerCenter < 0 or playerCenter > 1 then return end
+      barLockWriteAt = now + 0.05
+      local applied, writes = pcall(applygc, barLockFishCache,
+          "fishPosition", playerCenter)
+      pcall(applygc, barLockFishCache, "onbar", true)
+      if not applied or type(writes) ~= "number" or writes == 0 then
+          barLockFishCache = nil
+          barLockScanAt = now + 1
+          warn("Control Bar Lock: fish position write failed")
+      end
+  end
   macroCallbacks.stop = function()
       if not alive then return end
       alive, enabled = false, false
+      controlBarLockEnabled = false
+      restoreBarLock()
       autoTotem.enabled = false
       autoTotem.busy = false
       autoTotem.pending = false
@@ -3416,6 +3666,10 @@
       teleportWindow.bg:Remove()
       teleportWindow.border:Remove()
       fishEsp.clearDrawings()
+      if fishEsp.renderConnection then
+          pcall(function() fishEsp.renderConnection:Disconnect() end)
+          fishEsp.renderConnection = nil
+      end
       _G.StopFischMacro = nil
   end
   _G.StopFischMacro = macroCallbacks.stop
@@ -3666,7 +3920,8 @@
                   requestHarpoonToggle()
                end
                updatePanelInput(focused)
-               macroCallbacks.updateInstant(now, focused)
+              macroCallbacks.updateInstant(now, focused)
+              macroCallbacks.updateBarLock(now)
                local reelMinigameActive = enabled and focused and not panelInputCaptured
                    and fishingMinigameActive()
                local autoTotemBlocking = enabled and (autoTotem.busy
@@ -3687,7 +3942,7 @@
                        or panelInputCaptured and "PAUSED / PANEL"
                        or "PAUSED / UNFOCUSED")
               else
-                  local reel = gui and gui:FindFirstChild("reel")
+      local reel = gui and (gui:FindFirstChild("reel") or gui:FindFirstChild("Reel"))
                   local bar = reel and reel:FindFirstChild("bar")
                   local fish = bar and bar:FindFirstChild("fish")
                   local playerbar = bar and bar:FindFirstChild("playerbar")
@@ -3738,7 +3993,10 @@
                       end
                       wasReeling = true
                       releaseAt = nil
-                      if fish and playerbar then
+                      if controlBarLockEnabled then
+                          mouse(false)
+                          display("CONTROL BAR LOCK")
+                      elseif fish and playerbar then
                           local valid = macroCallbacks.track(bar, fish, playerbar, now)
                           display(
                               not valid and "WAITING FOR REEL"
@@ -3878,6 +4136,7 @@
               updateFade(now)
               local activeWork = enabled or autoTotem.enabled or fishEsp.enabled
                   or instantEnabled or rodSpeed.enabled or harpoonPullEnabled
+                  or controlBarLockEnabled
                   or dragging or teleportWindow.dragging
               local uiAnimating = dragging or teleportWindow.dragging
                   or npcMenuOpen or autoTotem.open or totemMenu.open
