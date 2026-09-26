@@ -18,7 +18,6 @@
   RS = game:GetService("ReplicatedStorage")
   Lighting = game:GetService("Lighting")
   W = game:GetService("Workspace")
-  VirtualInputManager = game:GetService("VirtualInputManager")
   UserInputService = game:GetService("UserInputService")
   ContextActionService = game:GetService("ContextActionService")
   local player = Players.LocalPlayer
@@ -50,14 +49,14 @@
   local navigationWanted = false
   local pendingKey, keyReleaseAt
   local nextCast, releaseAt = 0, nil
-  PERFECT_CAST_UPDATE = 0.1
-  perfectCastNextUpdate = 0
   perfectCastPercent, perfectCastInGreen = nil, false
   local castMeter, castFill, castGreen
   local idleSince
   local recoveryStage, recoveryAt = 0, 0
   local lastReequipAt, nextEquipAttemptAt = 0, 0
   local previous, drawings, layout = {}, {}, {}
+  _G.FischZodiacDebug = {}
+  previous.castIgnoredPowers = {}
   local inputConnections = {}
   local lastFish, lastBar, lastTime
   local fishVelocity, barVelocity = 0, 0
@@ -792,54 +791,23 @@
       local cache = totemMenu.buttonCache
       local now = tick()
       if now < cache.shakeAt then return cache.shake end
-      cache.shakeAt = now + 0.15
-      local currentGui = player:FindFirstChildOfClass("PlayerGui")
-      local shakeGui = currentGui and (currentGui:FindFirstChild("shakeui")
-          or currentGui:FindFirstChild("ShakeUI")
-          or currentGui:FindFirstChild("ShakeMinigame"))
-      local broadSearch = shakeGui == nil
-      if not shakeGui then shakeGui = currentGui end
-      if broadSearch then cache.shakeAt = now + 0.50 end
-      if not shakeGui then cache.shake = nil; return nil end
-      local found
-      for _, object in ipairs(shakeGui:GetDescendants()) do
-          local class = object.ClassName
-          if class == "GuiButton" or class == "TextButton"
-              or class == "ImageButton" or class == "TextLabel" then
-              local okText, text = pcall(function() return object.Text end)
-              if okText and type(text) == "string"
-                  and text:lower():find("shake", 1, true) then
-                  local visible, node = true, object
-                  while node and node ~= shakeGui do
-                      local okVisible, value = pcall(function() return node.Visible end)
-                      if okVisible and value == false then
-                          visible = false
-                          break
-                      end
-                      node = node.Parent
-                  end
-                  if visible then
-                      node = object
-                      while node and node ~= shakeGui do
-                          local nodeClass = node.ClassName
-                          if nodeClass == "GuiButton" or nodeClass == "TextButton"
-                              or nodeClass == "ImageButton" then
-                              found = node
-                              break
-                          end
-                          node = node.Parent
-                      end
-                      if not found and (class == "GuiButton"
-                          or class == "TextButton" or class == "ImageButton") then
-                          found = object
-                      end
-                  end
-              end
+      cache.shakeAt = now + 0.05
+      cache.shake = nil
+      local currentGui = player:FindFirstChild("PlayerGui")
+      local shakeGui = currentGui and currentGui:FindFirstChild("shakeui")
+      local safezone = shakeGui and shakeGui:FindFirstChild("safezone")
+      if not safezone then return nil end
+      -- LureShakeController clones the active custom button directly here.
+      -- Its title can be SHAKE, MANGO!, or another rod-specific string.
+      for _, button in ipairs(safezone:GetChildren()) do
+          if (button.ClassName == "ImageButton"
+              or button.ClassName == "TextButton")
+              and button:FindFirstChild("title") then
+              cache.shake = button
+              return button
           end
-          if found then break end
       end
-      cache.shake = found
-      return found
+      return nil
   end
   local HARPOON_SCAN_INTERVAL = 0.02
   local HARPOON_AIM_DELAY = 0.08
@@ -937,21 +905,31 @@
   local harpoonAimId
   task.spawn(function()
       while alive do
-          if (enabled or harpoonPullEnabled) and not panelInputCaptured then
-              local isHarpoonButton = harpoonPullEnabled
+          if (enabled or harpoonPullEnabled) and not panelInputCaptured
+              and isrbxactive()
+              and not (controlBarLockEnabled and previous.reelId) then
+              local isHarpoonButton = false
               local button, buttonX, buttonY, buttonId
-              if isHarpoonButton then
+              if harpoonPullEnabled then
                   button, buttonX, buttonY, buttonId = activeHarpoonPullButton()
-              elseif enabled then
+                  isHarpoonButton = button ~= nil
+              end
+              if not button and enabled then
                   button = activeShakeButton()
               end
               if button then
                   if not isHarpoonButton then
                       pcall(function()
                           local p, size = button.AbsolutePosition, button.AbsoluteSize
-                          if p and size and size.X > 8 and size.Y > 8 then
-                              buttonX, buttonY = p.X + size.X / 2, p.Y + size.Y / 2
-                          end
+                           if p and size and size.X > 8 and size.Y > 8 then
+                               buttonX, buttonY = p.X + size.X / 2, p.Y + size.Y / 2
+                           else
+                               local title = button:FindFirstChild("title")
+                               local titlePos = title and title.AbsolutePosition
+                               if titlePos then
+                                   buttonX, buttonY = titlePos.X + 12, titlePos.Y + 8
+                               end
+                           end
                       end)
                   end
                   if buttonX then
@@ -984,15 +962,9 @@
                                   end
                               end
                           end
-                      else
-                          pcall(mouse1press)
-                          pcall(mouse1release)
-                          pcall(function()
-                              VirtualInputManager:SendMouseButtonEvent(
-                                  buttonX, buttonY, 0, true, player, 0)
-                              VirtualInputManager:SendMouseButtonEvent(
-                                  buttonX, buttonY, 0, false, player, 0)
-                          end)
+                       else
+                           if previous.releaseMouse then previous.releaseMouse(false) end
+                           pcall(mouse1click)
                       end
                       if not isHarpoonButton then
                           if not lastShakeX
@@ -1250,64 +1222,78 @@
       if value then
           mouse1press()
       else
+          if previous.castConnections then
+              for _, connection in ipairs(previous.castConnections) do
+                  connection:Disconnect()
+              end
+              previous.castConnections = nil
+          end
           mouse1release()
           releaseAt = nil
           castMeter, castFill, castGreen = nil, nil, nil
-          perfectCastNextUpdate = 0
+          previous.castIgnoredPowers = {}
           perfectCastPercent, perfectCastInGreen = nil, false
       end
   end
   local function castReading()
-      if not (castMeter and castMeter.Parent and castFill and castFill.Parent) then
+      if not (castMeter and castMeter.Parent) then
           castMeter, castFill, castGreen = nil, nil, nil
           local character = player.Character
           local root = character and character:FindFirstChild("HumanoidRootPart")
-          local power = root and root:FindFirstChild("power")
-          castMeter = power and (power:FindFirstChild("powerbar")
-              or power:FindFirstChild("PowerBar") or power:FindFirstChild("bar"))
-          if not castMeter then
-              local currentGui = player:FindFirstChild("PlayerGui")
-              for _, object in ipairs(currentGui and currentGui:GetDescendants() or {}) do
-                  local name = tostring(object.Name):lower()
-                  if (name == "powerbar" or name == "castbar")
-                      and (object.ClassName == "Frame" or object.ClassName == "ImageLabel") then
-                      castMeter = object
+          if root then
+              for _, power in ipairs(root:GetChildren()) do
+                  if power.Name == "power" and not previous.castIgnoredPowers[power.Address] then
+                      local meter = power:FindFirstChild("powerbar")
+                      if meter then castMeter = meter end
+                  end
+              end
+          end
+      end
+      if not castMeter then return nil end
+      if not previous.castPowerAddress then
+          previous.scanCastPower()
+          return nil
+      end
+      local ok, entries = pcall(readtbl, previous.castPowerAddress, 5)
+      if not ok or type(entries) ~= "table" then
+          previous.castPowerAddress = nil
+          previous.scanCastPower()
+          return nil
+      end
+      local power, down
+      for _, entry in ipairs(entries) do
+          if entry.key == "power" then power = tonumber(entry.value) end
+          if entry.key == "mb1down" then down = entry.value == "true" end
+      end
+      if not power then
+          previous.castPowerAddress = nil
+          previous.scanCastPower()
+          return nil
+      end
+      if not down then return nil end
+      -- The rod client marks casts perfect at 96 - 2 * chargeStep;
+      -- chargeStep is 1.5-3, so 94% is inside the perfect zone for every cast.
+      return power, power >= 94
+  end
+  previous.releaseMouse = mouse
+  previous.scanCastPower = function()
+      if previous.castPowerAddress or previous.castPowerScanning
+          or type(findgc) ~= "function" then return end
+      previous.castPowerScanning = true
+      task.spawn(function()
+          local ok, found = pcall(findgc, "mb1down", {power = "number"})
+          if ok and type(found) == "table" then
+              for _, entry in ipairs(found) do
+                  if type(entry.addr) == "number" then
+                      previous.castPowerAddress = entry.addr
                       break
                   end
               end
           end
-          local castBar = castMeter and castMeter:FindFirstChild("bar")
-          castFill = castBar and (castBar:FindFirstChild("fill")
-              or castBar:FindFirstChild("Fill") or castBar)
-              or castMeter and (castMeter:FindFirstChild("fill")
-                  or castMeter:FindFirstChild("Fill"))
-          castGreen = castMeter and (castMeter:FindFirstChild("green")
-              or castMeter:FindFirstChild("perfect") or castMeter:FindFirstChild("Perfect"))
-      end
-      if not (castMeter and castFill) then return nil end
-      local visible = true
-      pcall(function()
-          visible = castMeter.Visible ~= false and castFill.Visible ~= false
+          previous.castPowerScanning = false
       end)
-      if not visible then return nil end
-      local size, origin = castMeter.AbsoluteSize, castMeter.AbsolutePosition
-      local fillSize = castFill.AbsoluteSize
-      if not (size and origin and fillSize) or size.Y <= 0 then return nil end
-      local amount = math.clamp(fillSize.Y / size.Y, 0, 1)
-      if not castGreen then return amount * 100, amount >= 0.98 end
-      local greenSize, greenPos = castGreen.AbsoluteSize, castGreen.AbsolutePosition
-      if not (greenSize and greenPos) or greenSize.Y <= 0 then
-          return amount * 100, false
-      end
-      local lower = math.clamp(1 - (greenPos.Y + greenSize.Y - origin.Y) / size.Y, 0, 1)
-      local upper = math.clamp(1 - (greenPos.Y - origin.Y) / size.Y, 0, 1)
-      if upper <= lower then return nil end
-      -- Perfect mode samples this meter every 0.1s.  Use the complete green
-      -- interval so a sample near the start of the zone is not discarded.
-      local tolerance = 0.015
-      return amount * 100,
-          amount >= lower - tolerance and amount <= upper + tolerance
   end
+  previous.scanCastPower()
   local function releaseKey()
       if pendingKey then
           keyrelease(pendingKey)
@@ -1613,6 +1599,20 @@
       }, 6)
       islandMenu.status.Text = ok and (live and ("At " .. row.name .. " marker") or ("At " .. row.name)) or "Teleport write failed"
       if not ok then warn("Island teleport: " .. tostring(err)) end
+  end
+  previous.watchCast = function()
+      local connection = game:GetService("RunService").RenderStepped:Connect(function()
+          if not alive or not enabled or not held or not releaseAt then return end
+          local percent, inGreen = castReading()
+          if (castMode == "Instant" and percent ~= nil)
+              or (castMode == "Perfect" and inGreen) then
+              mouse(false)
+              nextCast = tick() + RETRY
+              display(castMode == "Instant" and "PERFECT CAST OFF"
+                  or string.format("CAST %.0f%% / GREEN", percent or 0))
+          end
+      end)
+      previous.castConnections = {connection}
   end
   islandMenu.crates.teleport = function(row)
       prepareTeleport()
@@ -2038,8 +2038,9 @@
       local insideDropdown = (npcMenuOpen or autoTotem.open)
           and dropdownX and dropdownY
           and type(x) == "number" and type(y) == "number"
-          and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
-          and y >= dropdownY and y <= dropdownY + dropdownHeight
+           and x >= dropdownX and x <= dropdownX + PANEL_W * uiScale
+           and y >= dropdownY and y <= dropdownY + dropdownHeight
+      local mainHit = insideMain and not insideDropdown
       local inside = insideMain or insideDropdown
       local capture = inside or dragging or teleportWindow.dragging
       if capture and not panelInputCaptured then
@@ -2069,21 +2070,21 @@
       if not pcall(fishEsp.updateTyping) then
           fishEsp.editing = false
       end
-      if insideMain and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and localY >= 211 and localY <= 238 then
           automationMenuOpen = not automationMenuOpen
           automationArrow.Text = automationMenuOpen and "^" or "v"
           layoutTeleportMenus()
       end
        if fishEsp.editing and down and not leftWasDown
-           and not (inside and contentY >= 420 and contentY < 446) then
+           and not (mainHit and contentY >= 420 and contentY < 446) then
           fishEsp.editing = false
       end
        if rodSpeed.editing and down and not leftWasDown
-           and not (inside and contentY >= 367 and contentY < 391) then
+           and not (mainHit and contentY >= 367 and contentY < 391) then
           rodSpeed.editing = false
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and contentY >= 367 and contentY < 391 then
           if rodSpeed.text == "50" then rodSpeed.text = "" end
@@ -2091,24 +2092,24 @@
           rodSpeed.keys = {}
           rodSpeed.updateLabel()
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and contentY >= 420 and contentY < 446 then
           fishEsp.editing = true
           fishEsp.keys = {}
           fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
               or "one roaming fish name"
-      elseif inside and not dragging and down and not leftWasDown
+      elseif mainHit and not dragging and down and not leftWasDown
           and contentY >= 444 and contentY <= 470 then
           fishEsp.toggleEnabled()
           releasePanelInput()
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and contentY >= 391 and contentY <= 405 then
           rodSpeed.toggleEnabled()
           releasePanelInput()
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
           and contentY >= 334 and contentY < 356 then
@@ -2120,10 +2121,10 @@
           releasePanelInput()
       end
        if customGpsEditing and down and not leftWasDown
-           and not (inside and localY >= 406 and localY < 430) then
+           and not (insideDropdown and localY >= 406 and localY < 430) then
           customGpsEditing = false
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
           and contentY >= 311 and contentY < 334 then
@@ -2133,7 +2134,7 @@
           castModeText.Color = castMode == "Instant" and C.instantOff or C.green
           lastDisplay = ""
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and localY >= 5 and localY <= 35 then
           if localX >= PANEL_W - 58 and localX <= PANEL_W - 34 then
               resizePanel(-UI_SCALE_STEP)
@@ -2141,26 +2142,26 @@
               resizePanel(UI_SCALE_STEP)
           end
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
           and localY >= 259 and localY <= 280 then
           toggleInstant()
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
           and localY >= 238 and localY <= 258 then
           toggleMacro()
       end
-      if inside and not dragging and down and not leftWasDown
+      if mainHit and not dragging and down and not leftWasDown
           and automationMenuOpen
           and localX >= 10 and localX <= 147
           and contentY >= 291 and contentY <= 312 then
           toggleHarpoonPull()
       end
-      if inside and not dragging and down and not leftWasDown then
-          if insideMain
+      if (mainHit or insideDropdown) and not dragging and down and not leftWasDown then
+          if mainHit
               and localX >= 8 and localX <= PANEL_W - 8
               and localY >= autoTotem.tabTop - 1
               and localY < autoTotem.tabTop + 23 then
@@ -2172,7 +2173,7 @@
               totemMenu.anim, islandMenu.anim, islandMenu.crates.anim = 0, 0, 0
               if not autoTotem.open then autoTotem.anim = 0 end
               layoutTeleportMenus()
-          elseif insideMain
+          elseif mainHit
               and localX >= 8 and localX <= PANEL_W - 8
               and localY >= teleportsTabTop - 1
               and localY < teleportsTabTop + 23 then
@@ -2304,17 +2305,10 @@
       return nil
   end
   local function equippedRod()
-      return findFishingRod(player.Character)
-  end
-  ensureFishingRod = function()
-      if equippedRod() then return true end
-      local backpack = player:FindFirstChildOfClass("Backpack")
-      local rod = findFishingRod(backpack)
-      local character = player.Character
-      local humanoid = character and character:FindFirstChildOfClass("Humanoid")
-      if not rod or not humanoid then return false end
-      local ok = pcall(function() humanoid:EquipTool(rod) end)
-      return ok and equippedRod() ~= nil
+      local rod = findFishingRod(player.Character)
+      local values = rod and rod:FindFirstChild("values")
+      local casted = values and values:FindFirstChild("casted")
+      return rod, casted and casted.Value == true
   end
   fishingMinigameActive = function()
       gui = player and player:FindFirstChild("PlayerGui") or gui
@@ -2322,7 +2316,11 @@
       local bar = reel and reel:FindFirstChild("bar")
       local fish = bar and bar:FindFirstChild("fish")
       local playerbar = bar and bar:FindFirstChild("playerbar")
+      local character = player.Character
       return reel ~= nil and bar ~= nil and fish ~= nil and playerbar ~= nil
+          and character ~= nil
+          and character:GetAttribute("ReelActive") ~= nil
+          and character:GetAttribute("Reeling") == true
   end
   local function requestRodReequip(now)
       mouse(false)
@@ -3513,6 +3511,8 @@
       lastReequipAt, nextEquipAttemptAt = 0, 0
       nextCast = tick()
       wasReeling = false
+      previous.postReelRecoveryAt = nil
+      previous.reelEverActive = false
       resetTracking()
       if enabled then
           started, elapsed = tick(), 0
@@ -3556,13 +3556,6 @@
       harpoonToggleLast = now
       toggleHarpoonPull()
   end
-  pcall(function()
-      table.insert(inputConnections, UserInputService.InputBegan:Connect(function(input, processed)
-          if not processed and (input.KeyCode == 219 or input.KeyCode == 26) then
-              requestHarpoonToggle()
-          end
-      end))
-  end)
   macroCallbacks = macroCallbacks or {}
   macroCallbacks.updateInstant = function(now, focused)
       if not instantEnabled or not focused or now < nextInstant then return end
@@ -3581,127 +3574,44 @@
           end
       end
   end
-  local barLockMethodCache, barLockFishCache, barLockReelId
-  local barLockMethodLoading, barLockFishLoading = false, false
-  local barLockMethodApplied = false
-  local barLockFishGeneration = 0
-  local barLockScanAt, barLockWriteAt = 0, 0
-  local function normalIsInBar(self, fishPosition, fishWidth)
-      if self.barSize <= 0 then return false end
-      local halfFishWidth = (fishWidth or 0) / 2
-      return self.barPosition - self.barSize / 2 - halfFishWidth
-              < fishPosition
-          and fishPosition < self.barPosition + self.barSize / 2
-              + halfFishWidth
-  end
+  local barLockWriteAt = 0
   local function restoreBarLock()
-      if barLockMethodApplied and barLockMethodCache then
-          pcall(applygc, barLockMethodCache, "IsInBar", normalIsInBar)
+      local state = previous.reelGc
+      if state and state.lockOriginalMinBarSize then
+          pcall(applygc, state.cache, "minBarSize",
+              state.lockOriginalMinBarSize)
+          state.lockOriginalMinBarSize = nil
       end
-      barLockMethodApplied = false
   end
   macroCallbacks.updateBarLock = function(now)
       if not controlBarLockEnabled then
           restoreBarLock()
           return
       end
-      if type(getgc) ~= "function" or type(applygc) ~= "function" then
-          return
+      if type(applygc) ~= "function" or now < barLockWriteAt then return end
+      local state = previous.reelGc
+      if not state then return end
+      if state.lockOriginalMinBarSize == nil then
+          state.lockOriginalMinBarSize = previous.readReelGc("minBarSize")
+          if state.lockOriginalMinBarSize == nil then return end
       end
-      if not barLockMethodCache and not barLockMethodLoading then
-          barLockMethodLoading = true
-          task.spawn(function()
-              local ok, cache = pcall(getgc, "IsInBar")
-              barLockMethodLoading = false
-              if alive and ok and type(cache) == "table" and #cache > 0 then
-                  barLockMethodCache = cache
-              end
-          end)
-      end
-      if barLockMethodCache and not barLockMethodApplied then
-          local ok, writes = pcall(applygc, barLockMethodCache,
-              "IsInBar", function() return true end)
-          barLockMethodApplied = ok and type(writes) == "number"
-              and writes > 0
-      end
-      if not barLockMethodApplied then return end
-      local currentGui = player:FindFirstChild("PlayerGui")
-      local reel = currentGui and (currentGui:FindFirstChild("reel")
-          or currentGui:FindFirstChild("Reel"))
-      local bar = reel and reel:FindFirstChild("bar")
-      local playerbar = bar and bar:FindFirstChild("playerbar")
-      if not playerbar then
-          if barLockReelId then
-              barLockFishGeneration = barLockFishGeneration + 1
-              barLockReelId, barLockFishCache, barLockFishLoading =
-                  nil, nil, false
-          end
-          return
-      end
-      local reelId = tostring(reel.Address)
-      if reelId ~= barLockReelId then
-          barLockFishGeneration = barLockFishGeneration + 1
-          barLockReelId, barLockFishCache, barLockFishLoading =
-              reelId, nil, false
-          barLockScanAt = 0
-      end
-      if not barLockFishCache and not barLockFishLoading
-          and now >= barLockScanAt then
-          barLockFishLoading = true
-          barLockScanAt = now + 1
-          local generation = barLockFishGeneration
-          task.spawn(function()
-              local ok, cache = pcall(getgc, "fishPosition")
-              if not alive or generation ~= barLockFishGeneration then return end
-              barLockFishLoading = false
-              if ok and type(cache) == "table" and #cache > 0 then
-                  barLockFishCache = cache
-              end
-          end)
-      end
-      if not barLockFishCache or now < barLockWriteAt then return end
-      local ok, playerCenter = pcall(function()
-          -- Matcha reports 0x0 AbsoluteSize for the live reel GUI. Read
-          -- Position.X.Scale the same way as the reference Lock Bar script.
-          local position = playerbar.Position
-          if position and position.X
-              and type(position.X.Scale) == "number" then
-              return position.X.Scale
-          end
-          if type(memory_read) == "function" then
-              local address = tonumber(playerbar.Address)
-              if address then
-                  local readOk, scale = pcall(memory_read, "float",
-                      address + 1296)
-                  if readOk and type(scale) == "number"
-                      and scale == scale and scale >= 0 and scale <= 1 then
-                      return scale
-                  end
-              end
-          end
-          local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
-          local playerPos, playerSize = playerbar.AbsolutePosition,
-              playerbar.AbsoluteSize
-          if origin and size and playerPos and size.X > 0 then
-              return (playerPos.X + (playerSize and playerSize.X or 0) / 2
-                  - origin.X) / size.X
-          end
-      end)
-      if not ok or not playerCenter or playerCenter ~= playerCenter
-          or playerCenter < 0 or playerCenter > 1 then return end
-      barLockWriteAt = now + 0.05
-      local applied, writes = pcall(applygc, barLockFishCache,
-          "fishPosition", playerCenter)
-      pcall(applygc, barLockFishCache, "onbar", true)
-      if not applied or type(writes) ~= "number" or writes == 0 then
-          barLockFishCache = nil
-          barLockScanAt = now + 1
-          warn("Control Bar Lock: fish position write failed")
+      barLockWriteAt = now + 0.008
+      local applied, writes = pcall(applygc, state.cache, "minBarSize", 1)
+      if applied and type(writes) == "number" and writes > 0 then
+          pcall(applygc, state.cache, "barSize", 1)
+          pcall(applygc, state.cache, "barPosition", 0.5)
+          pcall(applygc, state.cache, "onbar", true)
+      elseif now >= (previous.barLockWarnAt or 0) then
+          previous.barLockWarnAt = now + 5
+          warn("Control Bar Lock: bar size write failed")
       end
   end
   macroCallbacks.stop = function()
       if not alive then return end
       alive, enabled = false, false
+      if previous.restoreZodiacLifetime then
+          previous.restoreZodiacLifetime()
+      end
       controlBarLockEnabled = false
       restoreBarLock()
       autoTotem.enabled = false
@@ -3803,19 +3713,335 @@
       previous[key] = current
       return pressed
   end
+  previous.scanReelGc = function()
+      if previous.reelGc or previous.reelGcLoading
+          or tick() < (previous.reelGcRetryAt or 0)
+          or type(getgc) ~= "function" then return end
+      previous.reelGcLoading = true
+      local generation = previous.reelGcGeneration or 0
+      task.spawn(function()
+          local ok, candidates = pcall(getgc, "minBarSize")
+          if not alive or generation ~= (previous.reelGcGeneration or 0) then return end
+          local selected, fallback
+          if ok and type(candidates) == "table" then
+              for _, candidate in ipairs(candidates) do
+                  if candidate.key == "minBarSize"
+                      and candidate.type == "number" then
+                      local readOk, entries = pcall(readtbl, candidate.tbl, 200)
+                      if readOk and type(entries) == "table" then
+                      local state = {cache = {candidate}, minBarSize = candidate.addr}
+                      local active = false
+                      for _, entry in ipairs(entries) do
+                          if entry.key == "fishPosition"
+                              or entry.key == "barPosition"
+                              or entry.key == "barSize" then
+                              state[entry.key] = tonumber(entry.addr)
+                          elseif entry.key == "active" then
+                              active = entry.value == "true"
+                          end
+                      end
+                      if state.barPosition and state.barSize then
+                          fallback = state
+                          if active then selected = state; break end
+                      end
+                      end
+                  end
+              end
+          end
+          previous.reelGc = selected or fallback
+          previous.reelGcLoading = false
+          previous.reelGcRetryAt = tick() + (previous.reelGc and 0 or 1)
+      end)
+  end
+  previous.scanReelFishGc = function()
+      local state = previous.reelGc
+      if not state or state.fishPosition or state.fishLoading
+          or type(getgc) ~= "function" then return end
+      state.fishLoading = true
+      local generation = previous.reelGcGeneration or 0
+      task.spawn(function()
+          local ok, entries = pcall(getgc, "fishPosition")
+          if not alive or generation ~= (previous.reelGcGeneration or 0) then return end
+          local nearest, distance
+          if ok and type(entries) == "table" then
+              for _, entry in ipairs(entries) do
+                  if entry.key == "fishPosition" and entry.type == "number" then
+                      local gap = math.abs(entry.addr - state.minBarSize)
+                      if gap < 8192 and (not distance or gap < distance) then
+                          nearest, distance = entry, gap
+                      end
+                  end
+              end
+          end
+          if nearest then state.fishPosition = nearest.addr end
+          state.fishLoading = false
+      end)
+  end
+  previous.readReelGc = function(key)
+      local state = previous.reelGc
+      local address = state and state[key]
+      if not address then return nil end
+      local ok, entries = pcall(readtbl, address, 1)
+      local entry = ok and type(entries) == "table" and entries[1]
+      if entry and entry.key == key then return tonumber(entry.value) end
+      return nil
+  end
+  previous.prepareZodiacLifetime = function()
+      if previous.zodiacLifetime or previous.zodiacLifetimeLoading
+          or tick() < (previous.zodiacLifetimeRetryAt or 0)
+          or type(getgc) ~= "function" then return end
+      previous.zodiacLifetimeLoading = true
+      task.spawn(function()
+          local ok, candidates = pcall(getgc, "WheelLifetime")
+          previous.zodiacLifetimeLoading = false
+          if not alive then return end
+          if ok and type(candidates) == "table" then
+              for _, candidate in ipairs(candidates) do
+                  if candidate.key == "WheelLifetime"
+                      and candidate.type == "number" then
+                      local readOk, entries = pcall(readtbl, candidate.tbl, 130)
+                      local hasSigns, barMode, clickLimit = false, false, false
+                      if readOk and type(entries) == "table" then
+                          for _, entry in ipairs(entries) do
+                              if entry.key == "Signs" then hasSigns = true
+                              elseif entry.key == "AlwaysUseWheel"
+                                  and entry.value == "false" then barMode = true
+                              elseif entry.key == "HardClickLimit"
+                                  and tonumber(entry.value) == 12 then
+                                  clickLimit = true
+                              end
+                          end
+                      end
+                      if hasSigns and barMode and clickLimit then
+                          previous.zodiacLifetime = {
+                              cache = {candidate},
+                              original = tonumber(candidate.value) or 5
+                          }
+                          break
+                      end
+                  end
+              end
+          end
+          previous.zodiacLifetimeRetryAt = tick() + 5
+      end)
+  end
+  previous.restoreZodiacLifetime = function()
+      local state = previous.zodiacLifetime
+      if state and state.applied then
+          pcall(applygc, state.cache, "WheelLifetime", state.original)
+          state.applied = false
+      end
+  end
+  previous.updateZodiacLifetime = function()
+      local rod = equippedRod()
+      if not rod or rod.Name ~= "Stellarwave Melody" then
+          previous.restoreZodiacLifetime()
+          return
+      end
+      previous.prepareZodiacLifetime()
+      local state = previous.zodiacLifetime
+      if state and not state.applied then
+          local ok, writes = pcall(applygc, state.cache,
+              "WheelLifetime", 20)
+          state.applied = ok and type(writes) == "number" and writes > 0
+      end
+  end
+  previous.scanZodiac = function(reel, rod)
+      if not reel or not rod or rod.Name ~= "Stellarwave Melody"
+          or type(getgc) ~= "function" then return end
+      local bar = reel:FindFirstChild("bar")
+      local signs = bar and bar:FindFirstChild("signContainer")
+      if not signs or not signs:FindFirstChild("sign1") then return end
+      local state = previous.zodiac
+      if state and (state.loading or state.progressAddr or state.finished
+          or tick() < (state.retryAt or 0)) then return end
+      state = state or {}
+      state.loading = true
+      state.startedAt = state.startedAt or tick()
+      _G.FischZodiacDebug.scanStartedAt = tick()
+      previous.zodiac = state
+      local generation = previous.zodiacGeneration or 0
+      task.spawn(function()
+          local ok, candidates = pcall(getgc, "signProgress")
+          if not alive or generation ~= (previous.zodiacGeneration or 0)
+              or previous.zodiac ~= state then return end
+          local sawHidden = false
+          if ok and type(candidates) == "table" then
+              for _, candidate in ipairs(candidates) do
+                  if candidate.key == "signProgress"
+                      and candidate.type == "number" then
+                      local readOk, entries = pcall(readtbl,
+                          candidate.addr - 1024, 96)
+                      if readOk and type(entries) == "table" then
+                          local orderAddr, hiddenAddr, hidden
+                          for _, entry in ipairs(entries) do
+                              if entry.key == "signOrder" then
+                                  orderAddr = entry.addr
+                              elseif entry.key == "wheelHidden" then
+                                  hiddenAddr = entry.addr
+                                  hidden = entry.value == "true"
+                              end
+                          end
+                          if orderAddr and hiddenAddr then
+                              if hidden then
+                                  sawHidden = true
+                              else
+                                  state.progressAddr = candidate.addr
+                                  state.orderAddr = orderAddr
+                                  state.hiddenAddr = hiddenAddr
+                                  break
+                              end
+                          end
+                      end
+                  end
+              end
+          end
+          state.loading = false
+          state.finished = sawHidden and not state.progressAddr
+          _G.FischZodiacDebug.scanSeconds = tick() - state.startedAt
+          _G.FischZodiacDebug.found = state.progressAddr ~= nil
+          _G.FischZodiacDebug.sawHidden = sawHidden
+          _G.FischZodiacDebug.matches = ok and type(candidates) == "table"
+              and #candidates or 0
+          state.retryAt = tick() + (state.progressAddr and 0 or 0.4)
+      end)
+  end
+  previous.readZodiacOrder = function(state)
+      if type(memory_read) ~= "function" then return nil end
+      local ok, entries = pcall(readtbl, state.orderAddr, 1)
+      local entry = ok and type(entries) == "table" and entries[1]
+      local hex = entry and entry.key == "signOrder"
+          and tostring(entry.value):match("0x(%x+)")
+      local pointer = hex and tonumber(hex, 16)
+      if not pointer then return nil end
+      local success, order = pcall(function()
+          local count = memory_read("uintptr", pointer + 8)
+          if count ~= 12 then return nil end
+          local array = memory_read("uintptr", pointer + 32)
+          if type(array) ~= "number" or array < 1000000000000 then
+              return nil
+          end
+          local result, seen = {}, {}
+          for i = 1, 12 do
+              local sign = memory_read("double", array + (i - 1) * 16)
+              if type(sign) ~= "number" or sign < 1 or sign > 12
+                  or sign % 1 ~= 0 or seen[sign] then return nil end
+              result[i], seen[sign] = sign, true
+          end
+          return result
+      end)
+      return success and order or nil
+  end
+  previous.updateZodiac = function(reel, now)
+      local state = previous.zodiac
+      if not state or state.finished or not state.progressAddr
+          or now < (state.nextAt or 0)
+          then return false end
+      local bar = reel and reel:FindFirstChild("bar")
+      local signs = bar and bar:FindFirstChild("signContainer")
+      if not signs then return false end
+      local ok, values = pcall(readtbl, state.hiddenAddr, 1)
+      if not ok or not values[1] or values[1].value == "true" then
+          state.finished = true
+          _G.FischZodiacDebug.status = "hidden"
+          return false
+      end
+      ok, values = pcall(readtbl, state.progressAddr, 1)
+      local progress = ok and values[1]
+          and tonumber(values[1].value)
+      if not progress or progress < 0 or progress >= 12 then return false end
+      _G.FischZodiacDebug.progress = progress
+      if state.pendingProgress then
+          if progress >= state.pendingProgress
+              or (state.pendingProgress == 12 and progress == 0) then
+              state.pendingProgress = nil
+              state.retries = 0
+          elseif now < (state.pendingUntil or 0) then
+              return true
+          elseif (state.retries or 0) >= 3 then
+              return false
+          else
+              state.pendingProgress = nil
+          end
+      end
+      local order = previous.readZodiacOrder(state)
+      if not order then
+          _G.FischZodiacDebug.status = "order unavailable"
+          return false
+      end
+      local slot
+      for i, sign in ipairs(order) do
+          if sign == progress + 1 then slot = i; break end
+      end
+      local button = slot and signs:FindFirstChild("sign" .. slot)
+      local position = button and button.AbsolutePosition
+      if not position or position.X <= 0 or position.Y <= 0 then
+          _G.FischZodiacDebug.status = "button unavailable"
+          return false
+      end
+      local size = button.AbsoluteSize
+      local offsetX = size and size.X > 8 and size.X / 2 or 0
+      local offsetY = size and size.Y > 8 and size.Y / 2 or 0
+      mouse(false)
+      if not moveMouseFast(position.X + offsetX,
+          position.Y + offsetY) then
+          _G.FischZodiacDebug.status = "mouse move failed"
+          return false
+      end
+      local clicked = pcall(mouse1click)
+      if not clicked then
+          _G.FischZodiacDebug.status = "mouse click failed"
+          return false
+      end
+      _G.FischZodiacDebug.status = "clicked sign " .. tostring(progress + 1)
+      _G.FischZodiacDebug.clicks = (_G.FischZodiacDebug.clicks or 0) + 1
+      state.pendingProgress = progress + 1
+      state.pendingUntil = now + 0.18
+      state.retries = (state.retries or 0) + 1
+      state.nextAt = now + 0.05
+      return true
+  end
+  previous.observeZodiac = function(now, focused)
+      local currentGui = player:FindFirstChild("PlayerGui")
+      local reel = currentGui and (currentGui:FindFirstChild("reel")
+          or currentGui:FindFirstChild("Reel"))
+      local reelId = reel and tostring(reel.Address) or nil
+      if reelId ~= previous.zodiacReelId then
+          previous.zodiacReelId = reelId
+          previous.zodiacGeneration = (previous.zodiacGeneration or 0) + 1
+          previous.zodiac = nil
+      end
+      previous.zodiacBusy = false
+      local rod = equippedRod()
+      if not reel or not rod or rod.Name ~= "Stellarwave Melody" then
+          return
+      end
+      previous.scanZodiac(reel, rod)
+      if focused then
+          previous.zodiacBusy = previous.updateZodiac(reel, now)
+      end
+  end
   macroCallbacks.track = function(bar, fish, playerbar, now)
-      local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
-      local fp, fs = fish.AbsolutePosition, fish.AbsoluteSize
-      local bp, bs = playerbar.AbsolutePosition, playerbar.AbsoluteSize
-      if not (origin and size and fp and fs and bp and bs)
-          or size.X <= 0 then
+      local f = previous.readReelGc("fishPosition")
+      local b = previous.readReelGc("barPosition")
+      local width = previous.readReelGc("barSize")
+      if not (f and b and width) then
+          local origin, size = bar.AbsolutePosition, bar.AbsoluteSize
+          local fp, fs = fish.AbsolutePosition, fish.AbsoluteSize
+          local bp, bs = playerbar.AbsolutePosition, playerbar.AbsoluteSize
+          if origin and size and fp and fs and bp and bs and size.X > 0 then
+              f = (fp.X + fs.X / 2 - origin.X) / size.X
+              b = (bp.X + bs.X / 2 - origin.X) / size.X
+              width = bs.X / size.X
+          end
+      end
+      if not (f and b and width) then
+          previous.scanReelGc()
+          previous.scanReelFishGc()
           mouse(false)
           resetTracking()
           return false
       end
-      local f = (fp.X + fs.X / 2 - origin.X) / size.X
-      local b = (bp.X + bs.X / 2 - origin.X) / size.X
-      local width = bs.X / size.X
       if f ~= f or b ~= b or width <= 0
           or math.abs(f) > 5 or math.abs(b) > 5 then
           mouse(false)
@@ -3900,6 +4126,7 @@
       mouse(desired)
       return true
   end
+  previous.prepareZodiacLifetime()
   layoutTeleportMenus()
   display("OFF")
   previous[MACRO_KEY] = iskeypressed(MACRO_KEY) == true
@@ -3975,6 +4202,8 @@
               local harpoonToggleScan = macroCallbacks.edge(0x1A) -- [ scan code
               local harpoonToggle = harpoonToggleVk or harpoonToggleScan
               local focused = isrbxactive()
+              _G.FischZodiacDebug.macroOn = enabled
+              _G.FischZodiacDebug.focused = focused
               local typing = false
               pcall(function()
                   typing = UserInputService:GetFocusedTextBox() ~= nil
@@ -4001,6 +4230,8 @@
                updatePanelInput(focused)
               typing = typing or customGpsEditing or fishEsp.editing or rodSpeed.editing
               macroCallbacks.updateInstant(now, focused)
+              previous.updateZodiacLifetime()
+              previous.observeZodiac(now, focused)
               macroCallbacks.updateBarLock(now)
                local reelMinigameActive = enabled and focused and not panelInputCaptured
                    and not typing
@@ -4025,18 +4256,67 @@
               else
       local reel = gui and (gui:FindFirstChild("reel") or gui:FindFirstChild("Reel"))
                   local bar = reel and reel:FindFirstChild("bar")
-                  local fish = bar and bar:FindFirstChild("fish")
-                  local playerbar = bar and bar:FindFirstChild("playerbar")
-                  local button = harpoonPullEnabled and activeHarpoonPullButton()
-                      or (enabled and activeShakeButton())
-                  local reelActive = reelMinigameActive
-                  local shakeActive = button ~= nil and not reelActive
-                   if equipPending and equippedRod() then
-                       equipPending = false
-                       equipReadyAt = 0
-                       nextEquipAttemptAt = 0
-                   end
-                   if equipPending then
+                   local fish = bar and bar:FindFirstChild("fish")
+                   local playerbar = bar and bar:FindFirstChild("playerbar")
+                    local reelUi = reel ~= nil and bar ~= nil
+                        and fish ~= nil and playerbar ~= nil
+                    _G.FischZodiacDebug.reelUi = reelUi
+                    local reelActive = reelMinigameActive
+                    local reelId = reelUi and tostring(reel.Address) or nil
+                    if reelId ~= previous.reelId then
+                        if previous.reelId and not previous.reelEndAt then
+                            previous.reelEndAt = now
+                        end
+                        previous.reelId = reelId
+                        previous.reelGcGeneration = (previous.reelGcGeneration or 0) + 1
+                        previous.reelGc = nil
+                        previous.reelGcLoading = false
+                        previous.reelGcRetryAt = 0
+                        if reelId then
+                            previous.reelEndAt = nil
+                            previous.reelEverActive = false
+                        end
+                        resetTracking()
+                    end
+                    if reelUi then
+                        previous.reelLastSeenAt = now
+                        local rod = equippedRod()
+                        local zodiacSigns = rod and rod.Name == "Stellarwave Melody"
+                            and bar:FindFirstChild("signContainer")
+                        zodiacSigns = zodiacSigns
+                            and zodiacSigns:FindFirstChild("sign1")
+                        if not zodiacSigns or (previous.zodiac
+                            and previous.zodiac.finished) then
+                            previous.scanReelGc()
+                        end
+                    end
+                    if reelActive then
+                        previous.reelEverActive = true
+                        previous.reelEndAt = nil
+                    elseif reelUi and previous.reelEverActive then
+                        previous.reelEndAt = previous.reelEndAt or now
+                    end
+                    if previous.reelEndAt and previous.reelEverActive then
+                        previous.postReelRecoveryAt = previous.reelEndAt + 1.5
+                    end
+                    local reelTransition = (reelUi and
+                        (not previous.reelEndAt or now - previous.reelEndAt < 0.05))
+                        or (not reelUi and previous.reelLastSeenAt
+                            and now - previous.reelLastSeenAt < 0.1)
+                    local button = harpoonPullEnabled and activeHarpoonPullButton()
+                        or (enabled and activeShakeButton())
+                     local shakeActive = button ~= nil and not reelActive
+                    if not reelTransition and not shakeActive
+                        and not equippedRod() and not equipPending then
+                        requestRodReequip(now)
+                    end
+                    if not reelTransition and equipPending and equippedRod() then
+                        equipPending = false
+                        equipReadyAt = now + 0.25
+                        nextCast = equipReadyAt
+                        nextEquipAttemptAt = 0
+                    end
+                    if equipPending and not reelTransition then
                       mouse(false)
                       setNavigation(false)
                       display("EQUIPPING ROD")
@@ -4045,22 +4325,15 @@
                           and now >= navigationReadyAt
                           and now >= nextEquipAttemptAt
                           and not pendingKey then
-                          if ensureFishingRod() then
-                              equipPending = false
-                              equipReadyAt = now + 0.40
-                              nextEquipAttemptAt = now + 0.75
-                              nextCast = equipReadyAt
-                              releaseAt = nil
-                              idleSince = nil
-                          elseif tap(0x54, now) then -- T fallback
-                              equipReadyAt = now + 0.40
-                              nextEquipAttemptAt = now + 0.75
-                              nextCast = equipReadyAt
+                           if tap(0x54, now) then -- T equips the saved rod
+                               equipReadyAt = now + 0.40
+                               nextEquipAttemptAt = now + 0.75
+                               nextCast = equipReadyAt
                               releaseAt = nil
                               idleSince = nil
                           end
                       end
-                  elseif now < equipReadyAt then
+                   elseif now < equipReadyAt and not reelTransition then
                       mouse(false)
                       display("EQUIPPING ROD")
                   elseif reelActive then
@@ -4074,7 +4347,9 @@
                       end
                       wasReeling = true
                       releaseAt = nil
-                      if controlBarLockEnabled then
+                      if previous.zodiacBusy then
+                          display("ZODIAC WHEEL")
+                      elseif controlBarLockEnabled then
                           mouse(false)
                           display("CONTROL BAR LOCK")
                       elseif fish and playerbar then
@@ -4084,11 +4359,20 @@
                               or fishMoving and "PREDICTING"
                               or "CENTERING"
                           )
-                      else
-                          mouse(false)
-                          display("WAITING FOR REEL")
-                      end
-                  elseif shakeActive then
+                       else
+                           mouse(false)
+                           display("WAITING FOR REEL")
+                       end
+                   elseif reelTransition then
+                       mouse(false)
+                       releaseKey()
+                       setNavigation(false)
+                       idleSince = nil
+                       recoveryStage = 0
+                       wasReeling = false
+                       resetTracking()
+                       display("WAITING FOR REEL")
+                   elseif shakeActive then
                       mouse(false)
                       releaseAt, idleSince = nil, nil
                       recoveryStage = 0
@@ -4110,7 +4394,19 @@
                           resetTracking()
                           nextCast, idleSince = now, now
                       end
-                      idleSince = idleSince or now
+                       local _, rodBusy = equippedRod()
+                       if rodBusy and previous.postReelRecoveryAt
+                           and now >= previous.postReelRecoveryAt then
+                           previous.postReelRecoveryAt = nil
+                           requestRodReequip(now)
+                           display("RECOVERING ROD")
+                       elseif rodBusy then
+                           idleSince = now
+                           recoveryStage = 0
+                       else
+                           idleSince = idleSince or now
+                           previous.postReelRecoveryAt = nil
+                       end
                       if recoveryStage == 0
                           and now - idleSince >= FAILSAFE then
                           mouse(false)
@@ -4152,11 +4448,8 @@
                                   nextCast = now + RETRY
                                   display("CAST METER UNAVAILABLE / RETRY")
                               end
-                          elseif castMode == "Perfect" then
-                              if now >= perfectCastNextUpdate then
-                                  perfectCastNextUpdate = now + PERFECT_CAST_UPDATE
-                                  perfectCastPercent, perfectCastInGreen = castReading()
-                              end
+                           elseif castMode == "Perfect" then
+                               perfectCastPercent, perfectCastInGreen = castReading()
                               if perfectCastInGreen then
                                   mouse(false)
                                   releaseAt = nil
@@ -4182,28 +4475,34 @@
                           else
                               display("PERFECT CAST OFF")
                           end
-                      elseif dragging then
-                          display("MOVING PANEL")
-                      elseif now >= nextCast then
-                          if equippedRod() then
-                              castMeter, castFill, castGreen = nil, nil, nil
-                              perfectCastNextUpdate = now
-                              perfectCastPercent, perfectCastInGreen = nil, false
-                              mouse(true)
-                              releaseAt = now -- Start of charge; not a release deadline.
-                              display(castMode == "Instant"
-                                  and "PERFECT CAST OFF" or "CAST 0% / 100%")
-                          elseif ensureFishingRod() then
-                              equipPending = false
-                              equipReadyAt = now + 0.40
-                              nextEquipAttemptAt = now + 0.75
-                              nextCast = equipReadyAt
-                              releaseAt = nil
-                              idleSince = nil
-                              display("EQUIPPING ROD")
-                          else
-                              requestRodReequip(now)
-                          end
+                       elseif dragging then
+                           display("MOVING PANEL")
+                       elseif rodBusy then
+                           display("WAITING FOR BITE")
+                       elseif now >= nextCast then
+                           if equippedRod() then
+                               castMeter, castFill, castGreen = nil, nil, nil
+                               previous.castIgnoredPowers = {}
+                               local character = player.Character
+                               local root = character and character:FindFirstChild("HumanoidRootPart")
+                               if root then
+                                   for _, power in ipairs(root:GetChildren()) do
+                                       if power.Name == "power" then
+                                            previous.castIgnoredPowers[power.Address] = true
+                                       end
+                                   end
+                               end
+                               perfectCastPercent, perfectCastInGreen = nil, false
+                               releaseAt = now
+                               previous.reelEverActive = false
+                               previous.postReelRecoveryAt = nil
+                               previous.watchCast()
+                               mouse(true)
+                               display(castMode == "Instant"
+                                   and "PERFECT CAST OFF" or "CAST 0% / 100%")
+                           else
+                               requestRodReequip(now)
+                           end
                       else
                           display("WAITING FOR BITE")
                       end
