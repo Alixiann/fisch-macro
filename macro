@@ -2,12 +2,33 @@
 if _G.Stop1aMacro then pcall(_G.Stop1aMacro) end
 if _G.StopFischMacro then pcall(_G.StopFischMacro) end
 local text=game:HttpGet("https://scripts.wabisabi.mom/wabi-sabi-ui-lib.lua")
+local bgFunctionMarker="local function renderWindow(dt)"
+local bgRectMarker='rect("win.bg", win.x, win.y, win.w, win.h, Theme.WindowBg, OP.Window, 11, 8)'
+local bgFunctionAt=text:find(bgFunctionMarker,1,true)
+local bgRectAt=text:find(bgRectMarker,1,true)
+if type(readfile)=="function" and bgFunctionAt and bgRectAt and bgRectAt>bgFunctionAt then
+    local ok,data=pcall(readfile,"wasd.lua")
+    if ok and type(data)=="string" and #data>0 then
+        text=text:sub(1,bgFunctionAt-1)
+            ..'local __1aBackgroundData = nil\npcall(function() __1aBackgroundData = readfile("wasd.lua") end)\n'
+            ..text:sub(bgFunctionAt)
+        bgRectAt=text:find(bgRectMarker,1,true)
+        if bgRectAt then
+            local bgInsert='\n    if __1aBackgroundData then Draw("1a.background", "Image", { Data=__1aBackgroundData, Position=Vector2.new(win.x,win.y), Size=Vector2.new(win.w,win.h), Transparency=0.42, ZIndex=9 }) end'
+            local afterBgRect=bgRectAt+#bgRectMarker
+            text=text:sub(1,afterBgRect-1)..bgInsert..text:sub(afterBgRect)
+        end
+    end
+end
 local chunk,err=loadstring(text); assert(chunk,err); chunk()
 local ui=WabiSabi; assert(type(ui)=="table","Wabi Sabi failed to initialize")
-ui:SetTheme("Dark"); ui:SetTranslucent(false)
-local win=ui:CreateWindow({Title="1a",SubTitle="Automation",Size=Vector2.new(520,430),MinSize=Vector2.new(520,430),Resize=false,Theme="Dark",Translucent=false,MinimizeKey="End"})
+ui:SetTheme("Aqua"); ui:SetTranslucent(false)
+local win=ui:CreateWindow({Title="1a",SubTitle="Have Fun Fishing",Size=Vector2.new(520,430),MinSize=Vector2.new(520,430),Resize=false,Theme="Aqua",Translucent=false,MinimizeKey="End"})
 local home=win:AddTab({Title="Home"})
-home:AddSection("Welcome"):AddParagraph({Title="1a",Content="Fishing automation is in the Automation tab."})
+home:AddSection("Welcome"):AddParagraph({
+    Title="Made by 1a",
+    Content="Make sure to star the post if you like the script.\nCatch 1 fish before enabling Instant Catch to avoid bugs/kicks.\nEnable Allow Unsafe Lua for Rod Speed Changer and possibly other features.\nMax graphics may cause lag.\nStellarwave Melody works best with the speed changer set to .4 - .6 and just have the macro on."
+})
 local macroTab=win:AddTab({Title="Macro"})
 local macroSection=macroTab:AddSection("Casting")
 local automation=win:AddTab({Title="Automation"})
@@ -36,6 +57,7 @@ local Workspace=game:GetService("Workspace")
 local Lighting=game:GetService("Lighting")
 local RunService=game:GetService("RunService")
 local alive=true
+local treasureClaimRunning=false
 local instant,instantLoading,instantApplied=false,false,false
 local instantCache,instantOriginal=nil,nil
 local rod,rodLoading=false,false
@@ -84,6 +106,7 @@ local fishEsp={
     areaFolderKey=nil,renderIndex=0,workerRunning=false,renderConnection=nil,
 }
 local npcRows={
+    {name="Jack Marrow",aliases={"jackmarrow"},pos={-2825,215,1517}},
     {name="Merlin",aliases={"merlin"},pos={-943,224,-988}},
     {name="Astronomer Vega",aliases={"astronomervega","vega"},preferHead=true,pos={-1957,227,-465},exactPosition=true},
     {name="Daily Shopkeeper",aliases={"dailyshopkeeper","dailyshop"},pos={229,139,42}},
@@ -1001,6 +1024,150 @@ local function teleportCrate(row)
     prepareTeleport()
     if writeTeleport(rowPosition(row),{0,0,0}) then setTeleportStatus("At "..row.name..".") end
 end
+local function findSunkenChest()
+    local root=characterRoot()
+    local origin=root and root.Position
+    local best,bestDistance=nil,math.huge
+    local ok,descendants=pcall(function() return Workspace:GetDescendants() end)
+    if not ok or type(descendants)~="table" then return nil end
+    local seen={}
+    for _,object in ipairs(descendants) do
+        local name=normalizeName(object.Name)
+        if name:find("sunken",1,true) and name:find("chest",1,true) then
+            local candidate=object
+            if object.ClassName~="Model" then
+                local ancestor=object.Parent
+                while ancestor and ancestor~=Workspace and ancestor.ClassName~="Model" do ancestor=ancestor.Parent end
+                if ancestor and ancestor~=Workspace then candidate=ancestor end
+            end
+            if not seen[candidate] then
+                seen[candidate]=true
+                local part=objectPart(candidate) or objectPart(object)
+                if part then
+                    local distance=origin and (part.Position-origin).Magnitude or 0
+                    if distance<bestDistance then best,bestDistance=part.Position,distance end
+                end
+            end
+        end
+    end
+    return best
+end
+local function teleportSunkenChest()
+    prepareTeleport()
+    local ok,position=pcall(findSunkenChest)
+    if not ok then
+        setTeleportStatus("Sunken chest scan failed.")
+        warn("Sunken chest scan: "..tostring(position))
+        return
+    end
+    if not position then
+        setTeleportStatus("No sunken chests found in this server.")
+        return
+    end
+    if writeTeleport(position,{0,3,4}) then setTeleportStatus("Teleported to the nearest sunken chest.") end
+end
+local function claimRevealedTreasureChests()
+    if treasureClaimRunning then
+        setTeleportStatus("Already visiting revealed treasure chests.")
+        return
+    end
+    if type(keypressFn)~="function" or type(keyreleaseFn)~="function" then
+        setTeleportStatus("Keyboard input is unavailable; cannot open chests.")
+        return
+    end
+    prepareTeleport()
+    treasureClaimRunning=true
+    task.spawn(function()
+        local positions,seen={},{}
+        local backpack=player and player:FindFirstChild("Backpack")
+        local character=player and player.Character
+        local mapTools={}
+        local function collectMaps(container,equipped)
+            if not container then return end
+            for _,tool in ipairs(container:GetChildren()) do
+                if tool.ClassName=="Tool" and normalizeName(tool.Name)=="treasuremap" then
+                    mapTools[#mapTools+1]={tool=tool,originalParent=container,equipped=equipped}
+                end
+            end
+        end
+        collectMaps(backpack,false)
+        collectMaps(character,true)
+        local gui=player and player:FindFirstChild("PlayerGui")
+        local mapGui=gui and gui:FindFirstChild("Treasure Map")
+        local main=mapGui and mapGui:FindFirstChild("Main")
+        local mapImage=main and main:FindFirstChild("TreasureMapImage")
+        local coordinateLabel=mapImage and mapImage:FindFirstChild("CoordinatesLabel")
+        local previousTool
+        if character then
+            for _,tool in ipairs(character:GetChildren()) do
+                if tool.ClassName=="Tool" then previousTool=tool; break end
+            end
+        end
+
+        local scanOk,scanErr=pcall(function()
+            for i,row in ipairs(mapTools) do
+                if not alive then break end
+                if not row.equipped and character then
+                    pcall(function() row.tool.Parent=character end)
+                    task.wait(.18)
+                end
+                local labelText
+                if coordinateLabel then pcall(function() labelText=coordinateLabel.Text end) end
+                local x,y,z
+                if type(labelText)=="string" then
+                    local sx,sy,sz=labelText:match("X%s*([%-%.%d]+),%s*Y%s*([%-%.%d]+),%s*Z%s*([%-%.%d]+)")
+                    x,y,z=tonumber(sx),tonumber(sy),tonumber(sz)
+                end
+                if x and y and z and math.abs(x)<1000000 and math.abs(y)<1000000 and math.abs(z)<1000000 then
+                    local key=string.format("%.3f,%.3f,%.3f",x,y,z)
+                    if not seen[key] then
+                        seen[key]=true
+                        positions[#positions+1]=Vector3.new(x,y,z)
+                    end
+                end
+                if not row.equipped and backpack then pcall(function() row.tool.Parent=backpack end) end
+                setTeleportStatus(string.format("Reading revealed maps %d of %d...",i,#mapTools))
+            end
+        end)
+        if previousTool and character then pcall(function() previousTool.Parent=character end) end
+        if not scanOk then
+            treasureClaimRunning=false
+            setTeleportStatus("Could not read Treasure Map coordinates.")
+            warn("Treasure map scan: "..tostring(scanErr))
+            return
+        end
+        if #positions==0 then
+            treasureClaimRunning=false
+            setTeleportStatus("No revealed Treasure Maps found.")
+            return
+        end
+
+        local attempted=0
+        local runOk,runErr=pcall(function()
+            for i,position in ipairs(positions) do
+                if not alive then break end
+                if writeTeleport(position,{0,2,0}) then
+                    setTeleportStatus(string.format("Opening revealed chest %d of %d...",i,#positions))
+                    task.wait(.35)
+                    local pressed=pcall(keypressFn,0x45)
+                    task.wait(.55)
+                    pcall(keyreleaseFn,0x45)
+                    if pressed then attempted=attempted+1 end
+                    task.wait(.45)
+                else
+                    break
+                end
+            end
+        end)
+        treasureClaimRunning=false
+        if not runOk then
+            setTeleportStatus("Treasure chest run stopped after an error.")
+            warn("Treasure chest run: "..tostring(runErr))
+        elseif alive then
+            setTeleportStatus(string.format("Visited %d of %d revealed chests; E was sent at each.",attempted,#positions))
+        end
+    end)
+end
 local function teleportTotem(row)
     prepareTeleport()
     local position=rowPosition(row)
@@ -1512,6 +1679,16 @@ npcSection:AddButton({
         for _,row in ipairs(npcRows) do if row.name==selectedNpc then teleportNpc(row); return end end
         setTeleportStatus("Choose an NPC destination first.")
     end
+})
+local treasureChestSection=teleportsTab:AddSection("Treasure Chests")
+treasureChestSection:AddButton({
+    Title="Claim Revealed Treasure Chests",Callback=function() claimRevealedTreasureChests() end
+})
+treasureChestSection:AddButton({
+    Title="Scan for Sunken Chests",Callback=function() teleportSunkenChest() end
+})
+treasureChestSection:AddParagraph({
+    Title="Sunken chests",Content="Scans loaded objects in this server and moves you to the nearest sunken chest."
 })
 local islandSection=teleportsTab:AddSection("Islands")
 local selectedIsland=islandRows[1].name
