@@ -238,6 +238,7 @@
       text = "50", editing = false, enabled = false, loading = false,
       keys = {}, cache = nil, original = nil, generation = 0,
   }
+  stellarWave = {button = nil, status = nil, loading = false}
   local function add(kind, x, y, baseOpacity)
       local d = Drawing.new(kind)
       d.Visible = true
@@ -361,6 +362,12 @@
   rodSpeed.status = label("signed value", 120, 394, 8)
   rodSpeed.status.Color = C.muted
   automationMenuDrawings[rodSpeed.status] = true
+  stellarWave.button = label("stellar wave auto symbol", 18, 413, 10)
+  stellarWave.button.Color = Color3.fromRGB(255, 255, 0)
+  automationMenuDrawings[stellarWave.button] = true
+  stellarWave.status = label("click to load", 160, 414, 8)
+  stellarWave.status.Color = C.muted
+  automationMenuDrawings[stellarWave.status] = true
   instantCatchNote = label("Catch a fish before Instant Catch", automationX, 276, 7)
   instantCatchNote.Color = C.muted
   automationMenuDrawings[instantCatchNote] = true
@@ -763,6 +770,25 @@
           rodSpeed.enabled = true
           rodSpeed.updateLabel()
           rodSpeed.apply()
+      end)
+  end
+  local function loadStellarWave()
+      if stellarWave.loading then return end
+      stellarWave.loading = true
+      stellarWave.status.Text = "loading..."
+      stellarWave.status.Color = C.yellow
+      task.spawn(function()
+          local ok, err = pcall(function()
+              local source = game:HttpGet("https://raw.githubusercontent.com/Alixiann/fisch-macro/refs/heads/main/stellar")
+              assert(type(source) == "string" and #source > 0, "empty script response")
+              local chunk, compileError = loadstring(source)
+              assert(type(chunk) == "function", compileError or "loadstring failed")
+              chunk()
+          end)
+          stellarWave.loading = false
+          stellarWave.status.Text = ok and "loaded" or "load failed"
+          stellarWave.status.Color = ok and C.green or C.instantOff
+          if not ok then warn("Stellarwave loader: " .. tostring(err)) end
       end)
   end
   local lastPanelX, lastPanelY
@@ -1422,21 +1448,22 @@
       if islandMenu.crates.arrow then islandMenu.crates.arrow.Text = islandMenu.crates.open and "^" or "v" end
       autoTotem.arrow.Text = autoTotem.open and "^" or "v"
       local automationOffset = automationMenuOpen and 0 or -141
-      -- Fish ESP occupies the 406-470 band.  Keep Auto Totem in its own row
-      -- immediately below it and above the Teleports row.
-      autoTotem.tabTop = 474 + automationOffset
-      teleportsTabTop = 506 + automationOffset
-      PANEL_H = 561 + automationOffset
+      -- Keep the new button and shifted rows aligned as the menu collapses.
+      autoTotem.tabTop = 510 + automationOffset
+      teleportsTabTop = 542 + automationOffset
+      PANEL_H = 597 + automationOffset
       local compactPositions = {
-          [fishEsp.heading] = 406,
-          [fishEsp.box] = 422,
-          [fishEsp.input] = 427,
-          [fishEsp.toggle] = 449,
-          [fishEsp.status] = 449,
-          [autoTotem.title] = 474,
-          [autoTotem.arrow] = 472,
-          [npcToggleText] = 506,
-          [npcArrow] = 504,
+          [stellarWave.button] = 414,
+          [stellarWave.status] = 414,
+          [fishEsp.heading] = 442,
+          [fishEsp.box] = 458,
+          [fishEsp.input] = 463,
+          [fishEsp.toggle] = 485,
+          [fishEsp.status] = 485,
+          [autoTotem.title] = 510,
+          [autoTotem.arrow] = 508,
+          [npcToggleText] = 542,
+          [npcArrow] = 540,
       }
       for _, entry in ipairs(layout) do
           local base = compactPositions[entry.d]
@@ -2077,7 +2104,7 @@
           layoutTeleportMenus()
       end
        if fishEsp.editing and down and not leftWasDown
-           and not (mainHit and contentY >= 420 and contentY < 446) then
+           and not (mainHit and contentY >= 456 and contentY < 482) then
           fishEsp.editing = false
       end
        if rodSpeed.editing and down and not leftWasDown
@@ -2093,13 +2120,13 @@
           rodSpeed.updateLabel()
       end
       if mainHit and not dragging and down and not leftWasDown
-          and contentY >= 420 and contentY < 446 then
+          and contentY >= 456 and contentY < 482 then
           fishEsp.editing = true
           fishEsp.keys = {}
           fishEsp.input.Text = fishEsp.text ~= "" and fishEsp.text:sub(-44)
               or "one roaming fish name"
       elseif mainHit and not dragging and down and not leftWasDown
-          and contentY >= 444 and contentY <= 470 then
+          and contentY >= 480 and contentY <= 506 then
           fishEsp.toggleEnabled()
           releasePanelInput()
       end
@@ -2107,6 +2134,13 @@
           and automationMenuOpen
           and contentY >= 391 and contentY <= 405 then
           rodSpeed.toggleEnabled()
+          releasePanelInput()
+      end
+      if mainHit and not dragging and down and not leftWasDown
+          and automationMenuOpen
+          and localX >= 16 and localX <= 145
+          and contentY >= 408 and contentY <= 434 then
+          loadStellarWave()
           releasePanelInput()
       end
       if mainHit and not dragging and down and not leftWasDown
