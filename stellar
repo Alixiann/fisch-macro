@@ -1,0 +1,196 @@
+-- Stellarwave Melody symbol clicker for Matcha.
+-- F6: toggle. F7: show/hide. X: unload. Drag the title to move.
+-- Read-only UI memory fallback is pinned to the verified Roblox build.
+local BUILD = "version-2366ba214ec740ca"
+if _G.StellarwaveMelodyGUI and _G.StellarwaveMelodyGUI.Stop then
+    _G.StellarwaveMelodyGUI.Stop()
+end
+local S = { enabled = false, running = true, visible = true, status = "Ready", clicks = 0,
+    rounds = 0, x = 42, y = 190, objects = {}, pending = nil }
+_G.StellarwaveMelodyGUI = S
+local player = game:GetService("Players").LocalPlayer
+local mouse = player:GetMouse()
+local run = game:GetService("RunService")
+local camera = workspace:FindFirstChildOfClass("Camera")
+local names = {"Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "Scorpio", "Sagittarius", "Capricorn", "Aquarius", "Pisces"}
+local ids = {"87713177367461", "79785331277449", "131660825899150", "112848958832289", "101622591206402", "134568966081333", "78633129282959", "85750329590074", "135640910512677", "118096235948723", "82332081547151", "131990023531922"}
+local rank = {}
+for i,id in ipairs(ids) do rank["rbxassetid://"..id] = i end
+local compatible = getrbxversion() == BUILD
+local function size(v)
+    local z = v.AbsoluteSize
+    if z and z.X > 0 and z.Y > 0 then return z.X,z.Y end
+    if not compatible then return 0,0 end
+    return memory_read("float",v.Address+0x104),memory_read("float",v.Address+0x108)
+end
+local function imageId(v)
+    if not v then return nil end
+    if not compatible then return nil end
+    local ptr = memory_read("uintptr",v.Address+0xa18)
+    if not ptr or ptr < 65536 then return nil end
+    return memory_read("string",ptr,48)
+end
+local function release()
+    if S.pressed then mouse1release(); S.pressed=false end
+end
+function S.SetEnabled(value)
+    release()
+    S.pending=nil
+    S.enabled=value and compatible
+    S.status=S.enabled and "Waiting for symbols" or "Paused"
+    if not compatible then S.status="Roblox updated - reader needs updating" end
+end
+function S.Stop()
+    S.running=false; S.enabled=false; release()
+    if S.connection then S.connection:Disconnect() end
+    for _,v in ipairs(S.objects) do pcall(function() v:Remove() end) end
+end
+local function draw(kind,props)
+    local d=Drawing.new(kind)
+    for k,v in pairs(props) do d[k]=v end
+    S.objects[#S.objects+1]=d
+    return d
+end
+local purple=Color3.fromRGB(173,143,255)
+local white=Color3.fromRGB(235,233,247)
+local muted=Color3.fromRGB(158,156,181)
+local panel=draw("Square",{Filled=true,Color=Color3.fromRGB(23,21,34),Rounding=10,ZIndex=80,Visible=true})
+local border=draw("Square",{Filled=false,Color=purple,Thickness=1,Rounding=10,ZIndex=81,Visible=true})
+local button=draw("Square",{Filled=true,Rounding=6,ZIndex=82,Visible=true})
+local function label(text,n,color)
+    return draw("Text",{Text=text,Size=n,Font=2,Color=color,Outline=false,ZIndex=83,Visible=true})
+end
+local title=label("Stellarwave Melody",19,white)
+local close=label("X",17,muted)
+local sub=label("Symbol minigame",13,muted)
+local toggle=label("AUTO SYMBOLS  OFF",15,white)
+local status=label("Ready",13,white)
+local count=label("Clicks: 0",12,muted)
+local keys=label("F6 toggle   /   F7 hide   /   Drag title",12,muted)
+local function inside(mx,my,x,y,w,h) return mx>=x and mx<=x+w and my>=y and my<=y+h end
+local function render()
+    local x,y=S.x,S.y
+    panel.Position=Vector2.new(x,y); panel.Size=Vector2.new(332,191)
+    border.Position=Vector2.new(x,y); border.Size=Vector2.new(332,191)
+    title.Position=Vector2.new(x+16,y+13); close.Position=Vector2.new(x+308,y+14)
+    sub.Position=Vector2.new(x+17,y+39)
+    button.Position=Vector2.new(x+15,y+64); button.Size=Vector2.new(302,36)
+    button.Color=S.enabled and Color3.fromRGB(101,72,165) or Color3.fromRGB(48,44,63)
+    toggle.Position=Vector2.new(x+29,y+74); toggle.Text=S.enabled and "AUTO SYMBOLS  ON" or "AUTO SYMBOLS  OFF"
+    status.Position=Vector2.new(x+17,y+114); status.Text=S.status
+    count.Position=Vector2.new(x+17,y+138); count.Text="Clicks: "..S.clicks.."   Sequences sent: "..S.rounds
+    keys.Position=Vector2.new(x+17,y+166)
+    for _,d in ipairs(S.objects) do d.Visible=S.visible end
+end
+local lastPoll,lastPaint=0,0
+local leftWas,f6Was,f7Was=false,false,false
+local dragging,dragX,dragY=false,0,0
+local function autoStep(now,container,reel,symbols)
+    local signature={}
+    local first=13
+    for n=1,12 do
+        local v=symbols[n]
+        if v then first=math.min(first,n); signature[#signature+1]=tostring(v.Address) end
+    end
+    signature=table.concat(signature,":")
+    if signature~=S.signature then
+        release(); S.pending=nil; S.signature=signature; S.next=first
+        S.widths={}; S.setStarted=now; S.complete=false
+    end
+    if S.complete then S.status="Sequence sent - waiting for shuffle"; return end
+    local n=S.next or first
+    local v=symbols[n]
+    if not v then S.status="Waiting for next sequence"; return end
+    local w,h=size(v)
+    local pos=v.AbsolutePosition
+    local viewport=camera and camera.ViewportSize
+    local maxX=viewport and viewport.X or 1920
+    local maxY=viewport and viewport.Y or 1080
+    local x,y=pos.X+w/2,pos.Y+h/2
+    local oldWidth=S.widths[n]
+    S.widths[n]=w
+    local usable=w>=12 and w<=200 and h>=12 and h<=200 and x>5 and y>5 and x<maxX-5 and y<maxY*0.91
+    -- A shrinking icon is leaving the screen, so wait for another cast.
+    if oldWidth and w<oldWidth-1.5 then usable=false end
+    if not usable then
+        release(); S.pending=nil; S.status="Waiting for "..names[n]; return
+    end
+    local p=S.pending
+    if not p then
+        if now<(S.nextClick or 0) then return end
+        -- Pause over the panel, so automatic input cannot toggle its own UI.
+        if S.visible and inside(x,y,S.x,S.y,332,191) then S.status="Move this panel away from symbols"; return end
+        mousemoveabs(math.floor(x+0.5),math.floor(y+0.5))
+        S.pending={at=now,phase="move",address=v.Address,x=x,y=y}
+        S.status="Clicking "..n.."/12 - "..names[n]
+        return
+    end
+    if p.address~=v.Address then release(); S.pending=nil; return end
+    if p.phase=="move" and now-p.at>=0.055 then
+        mousemoveabs(math.floor(x+0.5),math.floor(y+0.5))
+        mouse1press(); S.pressed=true; p.phase="press"; p.at=now
+    elseif p.phase=="press" and now-p.at>=0.045 then
+        release(); S.clicks=S.clicks+1; S.pending=nil; S.nextClick=now+0.085
+        S.next=n+1
+        if n==12 then S.complete=true; S.rounds=S.rounds+1 end
+    end
+end
+local function automation(now)
+    -- Re-resolve the short live UI path. No game-wide scans or game-state writes.
+    local pg=player:FindFirstChild("PlayerGui")
+    local reel=pg and pg:FindFirstChild("reel")
+    local bar=reel and reel:FindFirstChild("bar")
+    local container=bar and bar:FindFirstChild("signContainer")
+    if not container then
+        release(); S.pending=nil; S.container=nil; S.signature=nil; S.status="Waiting for symbols"; return
+    end
+    if S.container~=container.Address then
+        release(); S.pending=nil; S.container=container.Address; S.signature=nil; S.next=1
+    end
+    local symbols={}
+    for _,v in ipairs(container:GetChildren()) do
+        if string.match(v.Name,"^sign%d+$") then
+            local n=rank[imageId(v:FindFirstChild("baseSign"))]
+            if n then symbols[n]=v end
+        end
+    end
+    if not next(symbols) then S.status="Waiting for symbol images"; return end
+    S.symbols=symbols
+    autoStep(now,container,reel,symbols)
+end
+S.connection=run.RenderStepped:Connect(function()
+    if not S.running then return end
+    local now=tick()
+    local ok,err=pcall(function()
+        local focused=isrbxactive()
+        local left=ismouse1pressed()
+        local f6=iskeypressed(0x75)
+        local f7=iskeypressed(0x76)
+        if focused then
+            if f6 and not f6Was then S.SetEnabled(not S.enabled) end
+            if f7 and not f7Was then S.visible=not S.visible end
+            local mx,my=mouse.X,mouse.Y
+            if S.visible and left and not leftWas and not S.pending then
+                if inside(mx,my,S.x+298,S.y+5,31,31) then S.Stop(); return
+                elseif inside(mx,my,S.x+15,S.y+64,302,36) then S.SetEnabled(not S.enabled)
+                elseif inside(mx,my,S.x,S.y,294,36) then dragging=true; dragX=mx-S.x; dragY=my-S.y end
+            end
+            if dragging then
+                if left then S.x=math.max(0,mx-dragX); S.y=math.max(0,my-dragY) else dragging=false end
+            end
+        end
+        leftWas=left; f6Was=f6; f7Was=f7
+        if S.enabled and focused and not dragging then
+            if now-lastPoll>=0.025 then lastPoll=now; automation(now) end
+        elseif not focused then release(); S.pending=nil; if S.enabled then S.status="Paused - Roblox not focused" end end
+        if now-lastPaint>=0.05 then lastPaint=now; render() end
+    end)
+    if not ok then
+        release(); S.enabled=false; S.pending=nil; S.status="Stopped: reader error"; S.lastError=tostring(err)
+        warn("Stellarwave: "..tostring(err)); pcall(render)
+    end
+end)
+S.SetEnabled(false)
+render()
+print("Stellarwave GUI loaded. F6 toggles, F7 hides, X unloads.")
+
