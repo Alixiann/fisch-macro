@@ -2,7 +2,14 @@
 if _G.Stop1aMacro then pcall(_G.Stop1aMacro) end
 if _G.StopFischMacro then pcall(_G.StopFischMacro) end
 local text=game:HttpGet("https://scripts.wabisabi.mom/wabi-sabi-ui-lib.lua")
-local bgFunctionMarker="local function renderWindow(dt)"
+text=text:gsub('Window = 0.99,','Window = 0.08,',1); text=text:gsub('Aqua = { Accent = Color3%.fromRGB%(38, 200, 200%) },','Aqua = { Accent=Color3.fromRGB(255,255,255), WindowBg=Color3.fromRGB(36,36,36), WindowBorder=Color3.fromRGB(255,255,255), TitleBarLine=Color3.fromRGB(255,255,255), RailLine=Color3.fromRGB(255,255,255), Title=Color3.fromRGB(255,255,255), SubText=Color3.fromRGB(255,255,255), TabText=Color3.fromRGB(255,255,255), TabTextActive=Color3.fromRGB(255,255,255), TabHighlight=Color3.fromRGB(255,255,255), Element=Color3.fromRGB(42,42,42), ElementBorder=Color3.fromRGB(255,255,255), Text=Color3.fromRGB(255,255,255), ToggleSlider=Color3.fromRGB(255,255,255), ToggleKnobOn=Color3.fromRGB(255,255,255), Control=Color3.fromRGB(42,42,42), OverlayBg=Color3.fromRGB(32,32,32), OverlayBorder=Color3.fromRGB(255,255,255) },',1)
+local borderMarker='    outline("win.bd", win.x, win.y, win.w + 2, win.h + 2, Theme.WindowBorder, OP.Border, 10, 9)'
+local borderAt=text:find(borderMarker,1,true)
+if borderAt then
+    local borderAnimation='    Theme.WindowBorder=Color3.fromRGB(255,255,255)'
+    text=text:sub(1,borderAt-1)..borderAnimation..text:sub(borderAt)
+    text=text:gsub("Border = 0.40,","Border = 0.95,",1)
+end; local bgFunctionMarker="local function renderWindow(dt)"
 local bgRectMarker='rect("win.bg", win.x, win.y, win.w, win.h, Theme.WindowBg, OP.Window, 11, 8)'
 local bgFunctionAt=text:find(bgFunctionMarker,1,true)
 local bgRectAt=text:find(bgRectMarker,1,true)
@@ -14,7 +21,7 @@ if type(readfile)=="function" and bgFunctionAt and bgRectAt and bgRectAt>bgFunct
             ..text:sub(bgFunctionAt)
         bgRectAt=text:find(bgRectMarker,1,true)
         if bgRectAt then
-            local bgInsert='\n    if __1aBackgroundData then Draw("1a.background", "Image", { Data=__1aBackgroundData, Position=Vector2.new(win.x,win.y), Size=Vector2.new(win.w,win.h), Transparency=0.42, ZIndex=9 }) end'
+            local bgInsert='\n    if __1aBackgroundData then Draw("1a.background", "Image", { Data=__1aBackgroundData, Position=Vector2.new(win.x,win.y), Size=Vector2.new(win.w,win.h), Transparency=1, ZIndex=9, Rounding=11 }) end'
             local afterBgRect=bgRectAt+#bgRectMarker
             text=text:sub(1,afterBgRect-1)..bgInsert..text:sub(afterBgRect)
         end
@@ -22,12 +29,12 @@ if type(readfile)=="function" and bgFunctionAt and bgRectAt and bgRectAt>bgFunct
 end
 local chunk,err=loadstring(text); assert(chunk,err); chunk()
 local ui=WabiSabi; assert(type(ui)=="table","Wabi Sabi failed to initialize")
-ui:SetTheme("Aqua"); ui:SetTranslucent(false)
-local win=ui:CreateWindow({Title="1a",SubTitle="Have Fun Fishing",Size=Vector2.new(520,430),MinSize=Vector2.new(520,430),Resize=false,Theme="Aqua",Translucent=false,MinimizeKey="End"})
+ui:SetTheme("Aqua"); ui:SetTranslucent(true)
+local win=ui:CreateWindow({Title="1a",SubTitle="Have Fun Fishing",Size=Vector2.new(560,430),MinSize=Vector2.new(560,430),Resize=false,TabWidth=100,Theme="Aqua",Translucent=true,MinimizeKey="End"})
 local home=win:AddTab({Title="Home"})
 home:AddSection("Welcome"):AddParagraph({
     Title="Made by 1a",
-    Content="Make sure to star the post if you like the script.\nCatch 1 fish before enabling Instant Catch to avoid bugs/kicks.\nEnable Allow Unsafe Lua for Rod Speed Changer and possibly other features.\nMax graphics may cause lag.\nStellarwave Melody works best with the speed changer set to .4 - .6 and just have the macro on."
+    Content="Make sure to star the post if you like the script.\n\nCatch 1 fish before enabling Instant Catch to avoid bugs/kicks.\n\nEnable Allow Unsafe Lua for Rod Speed Changer and possibly other features.\n\nMax graphics may cause lag.\n\nStellarwave Melody works best with the speed changer set to .4 - .6 and just have the macro on."
 })
 local macroTab=win:AddTab({Title="Macro"})
 local macroSection=macroTab:AddSection("Casting")
@@ -71,6 +78,7 @@ local macroEnabled=false
 local macroToggle,macroKeybind,pMacro
 local macroPhase="idle"
 local macroMouseDown=false
+local macroInputState={lastRefresh=0,pulseNextAt=0,pulsePhase=false,isDown=ismouse1pressed,setToGame=getfenv(1).setrobloxinput}
 local macroLastDirectionChangeAt=0
 local macroInputRetryAt=0
 local macroCastAt,macroCastReleaseAt,macroReleasedAt,macroNextCast,macroNextEquip=0,0,0,0,0
@@ -83,6 +91,7 @@ local fishVelocity,barVelocity,fishActivity,fishQuiet=0,0,0,0
 local fishMoving=false
 local findgcFn,readtblFn=getfenv(1).findgc,getfenv(1).readtbl
 local mouse1releaseFn,mouse1pressFn=mouse1release,mouse1press
+
 local keypressFn,keyreleaseFn=keypress,keyrelease
 local castPowerAddress,castPowerScanning=nil,false
 local perfectReleased=false
@@ -203,20 +212,33 @@ local function hasCastMeter()
 end
 local function setMacroMouse(value)
     value=value==true
-    if macroMouseDown==value then return true end
+    local now=tick()
+    local changed=macroMouseDown~=value
+    if not changed then
+        if not value or now-macroInputState.lastRefresh<.12 then return true end
+        if type(macroInputState.setToGame)=="function" then pcall(macroInputState.setToGame,true) end
+        local held=false
+        if type(macroInputState.isDown)=="function" then
+            local heldOk,current=pcall(macroInputState.isDown)
+            held=heldOk and current==true
+        end
+        if held then macroInputState.lastRefresh=now; return true end
+    end
     local inputFn=value and mouse1pressFn or mouse1releaseFn
     if type(inputFn)~="function" then
         setMacroStatus(value and "Mouse press unavailable" or "Mouse release unavailable")
         return false
     end
+    if value and type(macroInputState.setToGame)=="function" then pcall(macroInputState.setToGame,true) end
     local ok,err=pcall(inputFn)
     if ok then
         macroMouseDown=value
-        macroLastDirectionChangeAt=tick()
+        if changed then macroLastDirectionChangeAt=now end
+        macroInputState.lastRefresh=now
         return true
     end
-    if tick()>=macroInputRetryAt then
-        macroInputRetryAt=tick()+1
+    if now>=macroInputRetryAt then
+        macroInputRetryAt=now+1
         warn("Fishing tracker input failed: "..tostring(err))
     end
     return false
@@ -225,6 +247,8 @@ local function resetMacroTracking()
     lastFish,lastBar,lastTrackTime=nil,nil,nil
     fishVelocity,barVelocity,fishActivity,fishQuiet=0,0,0,0
     fishMoving=false
+    macroInputState.pulseNextAt=0
+    macroInputState.pulsePhase=false
 end
 local function findFishingRod(container)
     if not container then return nil end
@@ -300,59 +324,104 @@ local function readCastPower()
     return power,down
 end
 local function trackReel(bar,fish,playerbar,now)
-    local f,b,width
+    local f,b,width,estimated
     local ok=pcall(function()
         local origin,size=bar.AbsolutePosition,bar.AbsoluteSize
         local fp,fs=fish.AbsolutePosition,fish.AbsoluteSize
         local bp,bs=playerbar.AbsolutePosition,playerbar.AbsoluteSize
-        if origin and size and fp and fs and bp and bs
-            and size.X>0 and fs.X>0 and bs.X>0 then
-            f=(fp.X+fs.X*.5-origin.X)/size.X
-            b=(bp.X+bs.X*.5-origin.X)/size.X
-            width=bs.X/size.X
+        if origin and fp and bp then
+            local originX,trackWidth=origin.X,size and size.X or 0
+            if trackWidth<=0 then
+                local left=bar:FindFirstChild("licon")
+                local right=bar:FindFirstChild("ricon")
+                local lp=left and left.AbsolutePosition
+                local rp=right and right.AbsolutePosition
+                if lp and rp and rp.X>lp.X then
+                    originX=lp.X
+                    trackWidth=rp.X-lp.X
+                end
+                estimated=true
+            end
+            if trackWidth>0 then
+                local fishRatio=(fs and fs.X>0) and fs.X/trackWidth or .05
+                width=(bs and bs.X>0) and bs.X/trackWidth or .16
+                local fishHalf=(fs and fs.X>0) and fs.X*.5 or trackWidth*fishRatio*.5
+                local barHalf=(bs and bs.X>0) and bs.X*.5 or trackWidth*width*.5
+                f=(fp.X+fishHalf-originX)/trackWidth
+                b=(bp.X+barHalf-originX)/trackWidth
+            end
         end
     end)
-    if not ok or not (f and b and width) or width<=0 or width>1.1
-        or f~=f or b~=b or f<-.1 or f>1.1 or b<-.1 or b>1.1 then
+    if not ok or not (f and b and width) or width<=0 or width>1.1 then
         setMacroMouse(false)
         resetMacroTracking()
-        setMacroStatus("Tracking - waiting for valid reel positions")
+        setMacroStatus("Tracking - reel positions unavailable")
+        return false
+    end
+    if f~=f or b~=b or f<-.1 or f>1.1 or b<-.1 or b>1.1 then
+        setMacroMouse(false)
+        resetMacroTracking()
+        setMacroStatus("Tracking - positions outside reel track")
         return false
     end
 
     f=math.clamp(f,0,1)
     b=math.clamp(b,0,1)
+    local halfWidth=math.clamp(width*.5,0,.5)
     local hadPrevious=lastTrackTime~=nil
+    local fishReversed=false
     local dt=hadPrevious and now-lastTrackTime or 0
     if dt>0 and dt<=.15 and lastFish and lastBar then
-        local fishDelta=f-lastFish
-        local barDelta=b-lastBar
-        local rawFish=math.clamp(fishDelta/dt,-1.5,1.5)
-        local rawBar=math.clamp(barDelta/dt,-1.5,1.5)
-        if rawFish*fishVelocity<0 then fishVelocity=rawFish end
-        fishVelocity+=(rawFish-fishVelocity)*(1-math.exp(-dt/.045))
-        barVelocity+=(rawBar-barVelocity)*(1-math.exp(-dt/.035))
+        local rawFish=math.clamp((f-lastFish)/dt,-4,4)
+        local rawBar=math.clamp((b-lastBar)/dt,-4,4)
+        if math.abs(rawFish)>.18 and fishVelocity*rawFish<0 then
+            fishVelocity=rawFish*.8
+            fishReversed=true
+        else
+            fishVelocity+=(rawFish-fishVelocity)*(1-math.exp(-dt/.035))
+        end
+        barVelocity+=(rawBar-barVelocity)*(1-math.exp(-dt/.05))
     else
         fishVelocity,barVelocity=0,0
     end
     lastFish,lastBar,lastTrackTime=f,b,now
 
-    -- Fisch uses held left mouse for right and release for left. Keep the
-    -- prediction short so a fast fish cannot make the bar run to an edge.
-    local lead=math.clamp(.035+math.abs(fishVelocity)*.018,.035,.065)
-    local target=math.clamp(f+fishVelocity*lead,0,1)
-    local error=target-b
-    local score=error*5+fishVelocity-barVelocity*.65
-    local deadband=.025
+    -- Align center-to-center and predict both the fish movement and bar coast.
+    local fishLead=fishReversed and .045 or math.clamp(.10+math.abs(fishVelocity)*.08,.10,.26)
+    local target=math.clamp(f+fishVelocity*fishLead,halfWidth,1-halfWidth)
+    local gapToTarget=math.abs(target-b)
+    local brakeLead=.075+math.clamp(.20-gapToTarget,0,.20)*.60
+        +math.clamp(math.abs(barVelocity)*.025,0,.05)
+    local predictedBar=math.clamp(b+barVelocity*brakeLead,halfWidth,1-halfWidth)
+    local error=target-predictedBar
+    local deadband=math.max(.006,width*.03)
+    local clickZone=math.max(.015,width*.08)
+    local edgeZone=.065
+    local onEdge=f<edgeZone or f>1-edgeZone
+    local centered=math.abs(error)<=clickZone
     local desired=macroMouseDown
-    if score>deadband then
-        desired=true
-    elseif score< -deadband then
-        desired=false
+    local trackingStatus
+    if centered and onEdge then
+        macroInputState.pulseNextAt=0
+        macroInputState.pulsePhase=macroMouseDown
+        trackingStatus=macroMouseDown and "Tracking - holding at edge" or "Tracking - waiting at edge"
+    elseif centered then
+        if now>=macroInputState.pulseNextAt then
+            macroInputState.pulsePhase=not macroInputState.pulsePhase
+            macroInputState.pulseNextAt=now+.04
+        end
+        desired=macroInputState.pulsePhase
+        trackingStatus="Tracking - rapid center clicks"
+    else
+        macroInputState.pulseNextAt=0
+        macroInputState.pulsePhase=false
+        if error>deadband then
+            desired=true
+        elseif error< -deadband then
+            desired=false
+        end
+        trackingStatus=desired and "Tracking - pressing right" or "Tracking - releasing left"
     end
-    if math.abs(error)>.16 then desired=error>0 end
-
-    -- Prevent direction chatter, while still correcting at up to 40 changes/s.
     if desired~=macroMouseDown and now-macroLastDirectionChangeAt<.025 then
         desired=macroMouseDown
     end
@@ -360,11 +429,10 @@ local function trackReel(bar,fish,playerbar,now)
     if not inputOk then
         setMacroStatus(desired and "Tracker input failed - right" or "Tracker input failed - left")
     else
-        setMacroStatus(desired and "Tracking - pressing right" or "Tracking - releasing left")
+        setMacroStatus(trackingStatus .. (estimated and " (estimated size)" or ""))
     end
     return inputOk
-end
-local function setMacroEnabled(value)
+end; local function setMacroEnabled(value)
     macroEnabled=value==true
     if macroEnabled then
         macroPhase="idle"
