@@ -74,6 +74,7 @@ local harpoon,stellarLoading=false,false
 local pInstant,pRod,pHarpoon,pStellar,slider
 local sliderUpdating=false
 local perfectCastEnabled=false
+_G.__1aForceNonPerfectCatch={enabled=false,cache=nil,lastApply=0}
 local macroEnabled=false
 local macroToggle,macroKeybind,pMacro
 local macroPhase="idle"
@@ -1693,6 +1694,23 @@ macroSection:AddToggle({Title="Perfect Cast",Default=false,Callback=function(v)
     perfectCastEnabled=v==true
     if perfectCastEnabled then scanCastPower() end
 end})
+section:AddToggle({Title="Force Non Perfect Catch",Default=false,Callback=function(v)
+    _G.__1aForceNonPerfectCatch.enabled=v==true
+    if not _G.__1aForceNonPerfectCatch.enabled then
+        if _G.__1aForceNonPerfectCatch.cache and type(applygcFn)=="function" then
+            pcall(applygcFn,_G.__1aForceNonPerfectCatch.cache,"perfect",true)
+        end
+        _G.__1aForceNonPerfectCatch.cache=nil
+        _G.__1aForceNonPerfectCatch.lastApply=0
+    elseif type(getgcFn)=="function" and type(applygcFn)=="function" then
+        local ok,cache=pcall(getgcFn,{"perfect"})
+        if ok and type(cache)=="table" then
+            _G.__1aForceNonPerfectCatch.cache=cache
+            pcall(applygcFn,cache,"perfect",false)
+            _G.__1aForceNonPerfectCatch.lastApply=tick()
+        end
+    end
+end})
 section:AddToggle({Title="Instant Catch",Default=false,Callback=function(v) toggleInstant(v==true) end})
 section:AddToggle({Title="Harpoon Pull",Default=false,Callback=function(v) harpoon=v==true; status(pHarpoon,harpoon and "On" or "Off") end})
 slider=section:AddSlider({Title="Rod Speed Value",Min=-1,Max=1,Default=0,Rounding=1,Callback=function(v) if not sliderUpdating then setRodValue(v) end end})
@@ -1894,6 +1912,25 @@ task.spawn(function()
                 task.wait(.50)
             end
         end
+    end
+end)
+task.spawn(function()
+    while alive do
+        if _G.__1aForceNonPerfectCatch.enabled then
+            if not _G.__1aForceNonPerfectCatch.cache or tick()-_G.__1aForceNonPerfectCatch.lastApply>=.10 then
+                if not _G.__1aForceNonPerfectCatch.cache and type(getgcFn)=="function" then
+                    local ok,cache=pcall(getgcFn,{"perfect"})
+                    if ok and type(cache)=="table" then
+                        _G.__1aForceNonPerfectCatch.cache=cache
+                    end
+                end
+                if _G.__1aForceNonPerfectCatch.cache and type(applygcFn)=="function" then
+                    pcall(applygcFn,_G.__1aForceNonPerfectCatch.cache,"perfect",false)
+                    _G.__1aForceNonPerfectCatch.lastApply=tick()
+                end
+            end
+        end
+        task.wait(.05)
     end
 end)
 task.spawn(function()
@@ -2114,7 +2151,11 @@ task.spawn(function()
 end)
 _G.Stop1aMacro=function()
     if not alive then return end
-    alive=false; resetInstant(); resetRod(); harpoon=false; macroEnabled=false; perfectCastEnabled=false; setMacroMouse(false)
+    alive=false; resetInstant(); resetRod(); harpoon=false; macroEnabled=false; perfectCastEnabled=false
+    _G.__1aForceNonPerfectCatch.enabled=false
+    if _G.__1aForceNonPerfectCatch.cache and type(applygcFn)=="function" then pcall(applygcFn,_G.__1aForceNonPerfectCatch.cache,"perfect",true) end
+    _G.__1aForceNonPerfectCatch.cache=nil
+    setMacroMouse(false)
     autoTotem.generation=autoTotem.generation+1
     autoTotem.enabled=false; autoTotem.busy=false; autoTotem.pending=false
     fishEsp.enabled=false; fishEspClearDrawings()
