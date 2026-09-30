@@ -1,7 +1,7 @@
 -- Stellarwave Melody symbol clicker for Matcha.
 -- F6: toggle. F7: show/hide. X: unload. Drag the title to move.
 -- Read-only UI memory fallback is pinned to the verified Roblox build.
-local BUILD = "version-2366ba214ec740ca"
+local BUILD = "version-02c37bc51a384b8f"
 if _G.StellarwaveMelodyGUI and _G.StellarwaveMelodyGUI.Stop then
     _G.StellarwaveMelodyGUI.Stop()
 end
