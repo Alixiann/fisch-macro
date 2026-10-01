@@ -44,9 +44,10 @@ local fishEspTab=win:AddTab({Title="Fish ESP"})
 local fishEspSection=fishEspTab:AddSection("Roaming Fish")
 local totemTab=win:AddTab({Title="Totem"})
 local totemSection=totemTab:AddSection("Auto Totem")
-local appraisalTab=win:AddTab({Title="Appraisal"})
-local appraisalSection=appraisalTab:AddSection("Appraisal")
-appraisalSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function()
+local teleportsTab=win:AddTab({Title="Teleports"})
+local etcTab=win:AddTab({Title="Etc"})
+local etcSection=etcTab:AddSection("Etc")
+etcSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function()
     task.spawn(function()
         local ok,err=pcall(function()
             local source=game:HttpGet("https://raw.githubusercontent.com/onlywraith/auto-appraise/refs/heads/main/autoappraise")
@@ -57,7 +58,22 @@ appraisalSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function(
         if not ok then warn("Auto appraisal by @WR@ITH: "..tostring(err)) end
     end)
 end})
-local teleportsTab=win:AddTab({Title="Teleports"})
+local anglerLoading=false
+etcSection:AddButton({Title="Auto Angler",Callback=function()
+    if anglerLoading then return end
+    anglerLoading=true
+    task.spawn(function()
+        local ok,err=pcall(function()
+            local remote=game:HttpGet("https://raw.githubusercontent.com/Alixiann/fisch-macro/refs/heads/main/angler")
+            assert(type(remote)=="string" and #remote>0,"empty script")
+            local fn,compileErr=loadstring(remote)
+            assert(type(fn)=="function",compileErr)
+            fn()
+        end)
+        anglerLoading=false
+        if not ok then warn("Auto Angler: "..tostring(err)) end
+    end)
+end})
 local player=game:GetService("Players").LocalPlayer
 local ReplicatedStorage=game:GetService("ReplicatedStorage")
 local Workspace=game:GetService("Workspace")
