@@ -1,0 +1,657 @@
+-- Auto Angler - Fisch
+-- Select an Angler/bestiary location, enable the toggle, and press F4 to stop/start.
+-- GUI interactions are performed with Matcha mouse/key input.
+
+local old = _G.AutoAnglerState
+if type(old) == "table" then if type(old.stop) == "function" then pcall(old.stop) else old.running = false end end
+
+local source = game:HttpGet("https://scripts.wabisabi.mom/wabi-sabi-ui-lib.lua")
+local function replaceUiOnce(old, new)
+    local at = string.find(source, old, 1, true)
+    assert(at, "Wabi Sabi tab layout changed")
+    source = string.sub(source, 1, at - 1) .. new .. string.sub(source, at + #old)
+end
+replaceUiOnce("if cfg.TabWidth then RAIL_W = math.max(80, math.floor(cfg.TabWidth)) end",
+    "if cfg.TabWidth then RAIL_W = math.max(0, math.floor(cfg.TabWidth)) end")
+replaceUiOnce("for i, t in ipairs(Tabs) do\n        local ty = tabY0",
+    "for i, t in ipairs(RAIL_W > 0 and Tabs or {}) do\n        local ty = tabY0")
+replaceUiOnce("local hdrH = 38", "local hdrH = RAIL_W > 0 and 38 or 0")
+replaceUiOnce("text(\"win.tabhdr\", tab.name, cx + 2, cvy + 4, 28, Theme.Text, 42)",
+    "if RAIL_W > 0 then text(\"win.tabhdr\", tab.name, cx + 2, cvy + 4, 28, Theme.Text, 42) end")
+replaceUiOnce("rect(\"tab.ind\", win.x + 8, tabY0 + State.IndOff.v + 7 + (16 - ih) / 2, 3, ih, Theme.Accent, 1, 61, 2)",
+    "if RAIL_W > 0 then rect(\"tab.ind\", win.x + 8, tabY0 + State.IndOff.v + 7 + (16 - ih) / 2, 3, ih, Theme.Accent, 1, 61, 2) end")
+local uiChunk, uiErr = loadstring(source)
+assert(type(uiChunk) == "function", uiErr)
+uiChunk()
+local ui = assert(WabiSabi, "Wabi Sabi UI failed to initialize")
+
+local win = ui:CreateWindow({Title="Auto Angler", SubTitle="Fisch Angler quests", Size=Vector2.new(500,680), MinSize=Vector2.new(500,360), Resize=true, TabWidth=0, Theme="Aqua", MinimizeKey="End"})
+local tab = win:AddTab({Title="Auto Angler"})
+local section = tab:AddSection("Quest loop")
+
+-- GPS points supplied for each Angler location.
+local locations = {
+    {name="Moosewood", pos=Vector3.new(480,150,302)},
+    {name="Roslit Hamlet", pos=Vector3.new(-1512,140,687)},
+    {name="Sunstone Island", pos=Vector3.new(-885,135,-1115)},
+    {name="Terrapin Island", pos=Vector3.new(-152,144,1951)},
+    {name="The Depths", pos=Vector3.new(980,-700,1230)},
+    {name="Ancient Isle", pos=Vector3.new(5738,177,-51)},
+    {name="Forsaken Shores", pos=Vector3.new(-2702,169,1798)},
+    {name="Crimson Cavern", pos=Vector3.new(-1070,-356,-4809)},
+    {name="Luminescent Cavern", pos=Vector3.new(-1046,-332,-4078)},
+    {name="Lost Jungle", pos=Vector3.new(-2726,226,-2186)},
+    {name="Ashbrook Town", pos=Vector3.new(-5137,153,-1331)},
+}
+local locationNames = {}
+for _, row in ipairs(locations) do locationNames[#locationNames+1] = row.name end
+local selected = locations[1]
+local enabled = false
+local statusParagraph
+local calibrationParagraph
+local statusText = "Off"
+local autoToggle
+local calibrations = _G.AutoAnglerCalibrations or {}
+_G.AutoAnglerCalibrations = calibrations
+local searchPoint = _G.AutoAnglerSearchPoint
+local lastHotkey = "none"
+
+local function setStatus(value)
+    local nextText = tostring(value)
+    if statusText ~= nextText then print("Auto Angler status: " .. nextText) end
+    statusText = nextText
+    _G.AutoAnglerStatus = statusText
+    if statusParagraph then
+        local ok, err = pcall(function() statusParagraph:SetContent(statusText) end)
+        if not ok then warn("Auto Angler status UI: " .. tostring(err)) end
+    end
+end
+
+local function calibrationText()
+    local dialogue = calibrations[selected.name] and "saved" or "not set"
+    local search = searchPoint and ("saved at " .. searchPoint.x .. ", " .. searchPoint.y) or "not set"
+    return "F6 " .. selected.name .. " dialogue: " .. dialogue .. "\nF7 inventory search: " .. search .. "\nLast hotkey: " .. lastHotkey
+end
+
+local function refreshCalibrationStatus()
+    if calibrationParagraph then
+        local ok, err = pcall(function() calibrationParagraph:SetContent(calibrationText()) end)
+        if not ok then warn("Auto Angler calibration UI: " .. tostring(err)) end
+    end
+end
+
+local function playerData()
+    local p = game:GetService("Players").LocalPlayer
+    local stats = game.Workspace:FindFirstChild("PlayerStats")
+    local user = stats and stats:FindFirstChild(p.Name)
+    local tree = user and user:FindFirstChild("T")
+    return tree and tree:FindFirstChild(p.Name)
+end
+
+-- Fisch exposes the requested fish as a BoolValue under the active Angler Quest.
+local function getRequestedFish()
+    local data = playerData()
+    local quests = data and data:FindFirstChild("Quests")
+    if not quests then return nil end
+    for _, quest in ipairs(quests:GetChildren()) do
+        if string.find(string.lower(quest.Name), "angler quest", 1, true) then
+            for _, value in ipairs(quest:GetChildren()) do
+                if value.ClassName == "BoolValue"
+                    and value.Name ~= "AutoComplete" and value.Name ~= "Tracking"
+                    and not string.find(value.Name, "_Goal", 1, true)
+                    and quest:FindFirstChild(value.Name .. "_Goal") then
+                    local goal = quest:FindFirstChild(value.Name .. "_Goal")
+                    if goal.Value == true then return value.Name end
+                end
+            end
+        end
+    end
+    return nil
+end
+
+local function tapKey(key)
+    local env = getfenv(1)
+    local down, up = env.keypress, env.keyrelease
+    if type(down) ~= "function" or type(up) ~= "function" then return false end
+    if type(env.setrobloxinput) == "function" then pcall(env.setrobloxinput, true) end
+    local ok = pcall(down, key)
+    task.wait(.06)
+    pcall(up, key)
+    return ok
+end
+
+local function pasteText(value)
+    local env=getfenv(1)
+    if type(env.setclipboard)~="function" or type(env.keypress)~="function" or type(env.keyrelease)~="function" then return false end
+    if type(env.setrobloxinput)=="function" then pcall(env.setrobloxinput,true) end
+    pcall(env.setclipboard,value)
+    local cleared = pcall(function()
+            env.keypress(0x11)
+            for _ = 1, 6 do
+                env.keypress(0x08); task.wait(.04); env.keyrelease(0x08)
+                task.wait(.04)
+            end
+            env.keyrelease(0x11)
+            task.wait(.08)
+    end)
+    local pasted = pcall(function()
+        env.keypress(0x11); env.keypress(0x56) -- Ctrl+V
+        task.wait(.06)
+        env.keyrelease(0x56); env.keyrelease(0x11)
+    end)
+    return cleared and pasted
+end
+
+local function calibrateSearch()
+    local player = game:GetService("Players").LocalPlayer
+    local mouse = player and player:GetMouse()
+    local camera = game.Workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize
+    if not mouse or not viewport or not isrbxactive()
+        or mouse.X < 0 or mouse.Y < 0 or mouse.X > viewport.X or mouse.Y > viewport.Y then
+        setStatus("Open inventory, hover over search bar, then press F7")
+        return
+    end
+    searchPoint = {x=mouse.X, y=mouse.Y}
+    _G.AutoAnglerSearchPoint = searchPoint
+    refreshCalibrationStatus()
+    setStatus("Search bar spot saved with F7")
+end
+
+local function clickSearchSpot()
+    if not searchPoint then return false end
+    local env = getfenv(1)
+    if type(env.mousemoveabs) ~= "function" or type(env.mouse1click) ~= "function" then return false end
+    if type(env.setrobloxinput) == "function" then pcall(env.setrobloxinput, true) end
+    local moved = pcall(env.mousemoveabs, searchPoint.x, searchPoint.y)
+    task.wait(.15)
+    return moved and pcall(env.mouse1click)
+end
+
+local function clickGui(object, fallbackX, fallbackY)
+    if not object then return false end
+    local ok, pos, size = pcall(function() return object.AbsolutePosition, object.AbsoluteSize end)
+    if not ok or not pos then return false end
+    local env = getfenv(1)
+    if type(env.mousemoveabs) ~= "function" or type(env.mouse1click) ~= "function" then return false end
+    if type(env.setrobloxinput) == "function" then pcall(env.setrobloxinput, true) end
+    local x = size and size.X >= 4 and size.X/2 or (fallbackX or 20)
+    local y = size and size.Y >= 4 and size.Y/2 or (fallbackY or 12)
+    pcall(env.mousemoveabs, pos.X + x, pos.Y + y)
+    task.wait(.08)
+    return pcall(env.mouse1click)
+end
+
+local function getDialogButtons()
+    local p = game:GetService("Players").LocalPlayer
+    local gui = p and p:FindFirstChild("PlayerGui")
+    local dialog = gui and gui:FindFirstChild("options")
+    local options = dialog and dialog:FindFirstChild("safezone")
+    local buttons = {}
+    if options then
+        for _, object in ipairs(options:GetChildren()) do
+            if object.ClassName == "Frame" and object.Name ~= "template" then
+                local label = object:FindFirstChild("text")
+                local button = object:FindFirstChild("button")
+                local y = 0
+                local text = ""
+                pcall(function() y = label.AbsolutePosition.Y; text = label.Text or "" end)
+                if label and button then buttons[#buttons+1] = {label=label, button=button, text=text, y=y} end
+            end
+        end
+    end
+    table.sort(buttons, function(a,b) return a.y < b.y end)
+    return buttons
+end
+
+local function anglerHead()
+    local world = game.Workspace:FindFirstChild("world")
+    local npcs = world and world:FindFirstChild("npcs")
+    if not npcs then return nil end
+    local nearest, bestDistance
+    for _, npc in ipairs(npcs:GetChildren()) do
+        if npc.ClassName == "Model" and string.find(string.lower(npc.Name), "angler", 1, true) then
+            local head = npc:FindFirstChild("Head")
+            if head then
+                local p = head.Position
+                local dx, dy, dz = p.X-selected.pos.X, p.Y-selected.pos.Y, p.Z-selected.pos.Z
+                local distance = dx*dx + dy*dy + dz*dz
+                if not bestDistance or distance < bestDistance then nearest, bestDistance = head, distance end
+            end
+        end
+    end
+    if bestDistance and bestDistance < 600*600 then return nearest end
+    return nil
+end
+
+local function projectedAngler()
+    local head = anglerHead()
+    if not head then return nil end
+    local result, visible
+    local connection
+    connection = game:GetService("RunService").RenderStepped:Connect(function()
+        result, visible = WorldToScreen(head.Position)
+        connection:Disconnect()
+    end)
+    local deadline = tick() + 1
+    while not result and tick() < deadline do task.wait(.01) end
+    if connection and not result then connection:Disconnect() end
+    if not visible then return nil end
+    return result
+end
+
+local function calibrateDialogue()
+    local top = getDialogButtons()[1]
+    local label = top and top.label
+    if not label then setStatus("Open Angler dialogue before pressing F6"); return end
+    local screen = projectedAngler()
+    local player = game:GetService("Players").LocalPlayer
+    local mouse = player and player:GetMouse()
+    local camera = game.Workspace.CurrentCamera
+    local viewport = camera and camera.ViewportSize
+    if not screen or not mouse or not viewport or not isrbxactive()
+        or mouse.X < 0 or mouse.Y < 0 or mouse.X > viewport.X or mouse.Y > viewport.Y then
+        setStatus("Hover over the top Angler choice in Roblox, then press F6")
+        return
+    end
+    local pos = label.AbsolutePosition
+    calibrations[selected.name] = {dx=mouse.X-screen.X, dy=mouse.Y-screen.Y,
+        labelX=pos.X, labelY=pos.Y}
+    refreshCalibrationStatus()
+    setStatus("Dialogue calibrated for " .. selected.name)
+end
+
+local function clickProjectedOption(option)
+    local calibration = calibrations[selected.name]
+    if not calibration then return false end
+    local screen = projectedAngler()
+    if not screen then return false end
+    local pos = option.label.AbsolutePosition
+    local x = screen.X + calibration.dx + pos.X - calibration.labelX
+    local y = screen.Y + calibration.dy + pos.Y - calibration.labelY
+    local env = getfenv(1)
+    if type(env.mousemoveabs) ~= "function" or type(env.mouse1click) ~= "function" then return false end
+    if type(env.setrobloxinput) == "function" then pcall(env.setrobloxinput, true) end
+    local moved = pcall(env.mousemoveabs, x, y)
+    task.wait(.08)
+    return moved and pcall(env.mouse1click)
+end
+
+local function chooseDialogueOption(claiming)
+    local untilAt = tick() + 30
+    while enabled and tick() < untilAt do
+        if not calibrations[selected.name] then
+            setStatus("Hover over the top Angler choice and press F6 once")
+            task.wait(.2)
+        else
+        local buttons = getDialogButtons()
+        if claiming then
+            for _, option in ipairs(buttons) do
+                if string.find(string.lower(option.text), "what's the job", 1, true) then
+                    setStatus("Clicking What's the job?")
+                    if clickProjectedOption(option) then return true end
+                end
+            end
+        elseif #buttons > 0 then
+            setStatus("Clicking top turn-in option")
+            if clickProjectedOption(buttons[1]) then return true end
+        end
+        end
+        task.wait(.15)
+    end
+    return false
+end
+
+local function teleportToSelected()
+    local p = game:GetService("Players").LocalPlayer
+    local char = p and p.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return false end
+    local ok, err = pcall(function()
+        root.CFrame = CFrame.new(selected.pos.X, selected.pos.Y, selected.pos.Z)
+    end)
+    if not ok then warn("Auto Angler teleport: " .. tostring(err)) end
+    return ok
+end
+
+local function askForQuest()
+    if not teleportToSelected() then setStatus("Waiting for character..."); return false end
+    setStatus("No active quest; claiming at " .. selected.name)
+    task.wait(.8)
+    tapKey(0x45) -- E: interact with the Angler's proximity prompt
+    task.wait(.35)
+    setStatus("Clicking top dialogue option to claim quest")
+    if not chooseDialogueOption(true) then
+        setStatus("Quest claim option not found; retrying")
+        return false
+    end
+    return true
+end
+
+local function coreInventory()
+    local core = game:GetService("CoreGui")
+    local robloxGui = core and core:FindFirstChild("RobloxGui")
+    local backpack = robloxGui and robloxGui:FindFirstChild("Backpack")
+    return backpack and backpack:FindFirstChild("Inventory")
+end
+
+local function customInventory()
+    local player = game:GetService("Players").LocalPlayer
+    local gui = player and player:FindFirstChild("PlayerGui")
+    local backpack = gui and gui:FindFirstChild("backpack")
+    return backpack and backpack:FindFirstChild("inventory")
+end
+
+local function inventoryWithItems()
+    local core, custom = coreInventory(), customInventory()
+    if searchPoint and core and custom then
+        local coreSearch = core:FindFirstChild("Search")
+        local topbar = custom:FindFirstChild("Topbar")
+        local customSearch = topbar and topbar:FindFirstChild("Search")
+        if coreSearch and customSearch then
+            local coreY = coreSearch.AbsolutePosition.Y + 18
+            local customY = customSearch.AbsolutePosition.Y + 18
+            if math.abs(searchPoint.y - customY) < math.abs(searchPoint.y - coreY) then
+                return custom, "custom"
+            end
+            return core, "core"
+        end
+    end
+    local function count(inventory, kind)
+        if not inventory then return -1 end
+        local container
+        if kind == "custom" then
+            container = inventory:FindFirstChild("itemContainer")
+        else
+            local scroll = inventory:FindFirstChild("ScrollingFrame")
+            container = scroll and scroll:FindFirstChild("UIGridFrame")
+        end
+        if not container then return -1 end
+        local total = 0
+        for _, slot in ipairs(container:GetChildren()) do
+            if slot.ClassName == "TextButton" or slot.ClassName == "ImageButton" then total = total + 1 end
+        end
+        return total
+    end
+    if count(custom, "custom") > count(core, "core") then return custom, "custom" end
+    if core then return core, "core" end
+    return custom, "custom"
+end
+
+local function closeInventory(kind)
+    if kind == "custom" then
+        local inventory = customInventory()
+        local top = inventory and inventory:FindFirstChild("TopButtons")
+        local close = top and top:FindFirstChild("Close")
+        if close and clickGui(close, 12, 12) then task.wait(.2); return end
+    end
+    tapKey(0xC0); task.wait(.2) -- ` key
+end
+
+local function openInventory()
+    if not isrbxactive() then
+        setStatus("Focus the Roblox game before opening inventory")
+        return false
+    end
+    setStatus("Opening inventory with `")
+    if not tapKey(0xC0) then return false end
+    task.wait(.8)
+    return true
+end
+
+local function findInventoryFish(target, inventory, kind)
+    local container
+    if kind == "custom" then
+        container = inventory:FindFirstChild("itemContainer")
+    else
+        local scroll = inventory:FindFirstChild("ScrollingFrame")
+        container = scroll and scroll:FindFirstChild("UIGridFrame")
+    end
+    if not container then return nil end
+    for _, slot in ipairs(container:GetChildren()) do
+        if slot.ClassName == "TextButton" or slot.ClassName == "ImageButton" then
+            local label = slot:FindFirstChild(kind == "custom" and "ItemName" or "ToolName")
+            local name = ""
+            pcall(function() name = label and label.Text or "" end)
+            if string.lower(name) == string.lower(target) then return slot end
+        end
+    end
+    return nil
+end
+
+local function fishIsHeld(target)
+    local player = game:GetService("Players").LocalPlayer
+    local char = player and player.Character
+    if not char then return false end
+    for _, item in ipairs(char:GetChildren()) do
+        if item.ClassName == "Tool" and string.lower(item.Name) == string.lower(target) then return true end
+    end
+    return false
+end
+
+local function searchAndHoldFish(target)
+    local inventory, kind = inventoryWithItems()
+    if not inventory then return false, "inventory" end
+
+    local function searchOnce()
+        local topbar = kind == "custom" and inventory:FindFirstChild("Topbar") or nil
+        local search = kind == "custom" and topbar and topbar:FindFirstChild("Search")
+            or inventory:FindFirstChild("Search")
+        if not search then return false, "search" end
+        setStatus("Clicking search bar for " .. target)
+        if not clickSearchSpot() then return false, "search" end
+        task.wait(.35) -- let the TextBox take focus before sending any keys
+        setStatus("Typing " .. target)
+        if not pasteText(target) then return false, "typing" end
+        local untilAt = tick() + 8
+        local fish
+        while enabled and tick() < untilAt do
+            fish = findInventoryFish(target, inventory, kind)
+            if fish then break end
+            task.wait(.2)
+        end
+        if not fish then return false, "missing" end
+        setStatus("Clicking " .. target)
+        if not clickGui(fish, 25, 25) then return false, "select" end
+        local heldUntil = tick() + 2
+        while enabled and tick() < heldUntil do
+            if fishIsHeld(target) then return true end
+            task.wait(.1)
+        end
+        return false, "hold"
+    end
+
+    -- Try the panel the player may already have open. If it was closed,
+    -- use the game's ` shortcut and try again.
+    local success, reason = searchOnce()
+    if not success and enabled and openInventory() then success, reason = searchOnce() end
+    closeInventory(kind)
+    return success, reason
+end
+
+local function waitWhileEnabled(seconds)
+    local untilAt = tick() + seconds
+    while enabled and tick() < untilAt do task.wait(.25) end
+end
+
+local function runOneQuest()
+    setStatus("Checking whether an Angler quest needs claiming")
+    local target = getRequestedFish()
+    if not target then
+        if not askForQuest() then return false end
+        local untilAt = tick() + 10
+        repeat
+            target = getRequestedFish()
+            if target then break end
+            task.wait(.2)
+        until not enabled or tick() >= untilAt
+    end
+    if not target then setStatus("No active Angler request detected."); return false end
+    setStatus("Requested fish: " .. target)
+    if not searchPoint then
+        setStatus("Open inventory, hover over search bar, then press F7")
+        waitWhileEnabled(1)
+        return false
+    end
+    local held, reason = searchAndHoldFish(target)
+    if not enabled then setStatus("Off"); return false end
+    if not held then
+        if reason == "missing" then
+            setStatus("No " .. target .. " in inventory; checking again in 30 seconds")
+        else
+            setStatus("Could not hold " .. target .. " (" .. tostring(reason) .. "); retrying in 30 seconds")
+        end
+        waitWhileEnabled(30)
+        return false
+    end
+    if not teleportToSelected() then setStatus("Waiting for character..."); return false end
+    task.wait(.6)
+    tapKey(0x45)
+    task.wait(.35)
+    if not chooseDialogueOption(false) then
+        setStatus("Turn-in dialogue option not found.")
+        return false
+    end
+    local untilAt = tick() + 8
+    local completed = false
+    while enabled and tick() < untilAt do
+        if getRequestedFish() ~= target then completed = true; break end
+        task.wait(.2)
+    end
+    if not completed then
+        setStatus("Turn-in not confirmed; retrying in 10 seconds")
+        waitWhileEnabled(10)
+        return false
+    end
+    setStatus("Quest complete; waiting 2 minutes")
+    waitWhileEnabled(120)
+    return enabled
+end
+
+autoToggle = section:AddToggle({Id="auto_angler_toggle", Title="Auto Angler", Default=false, Callback=function(value)
+    enabled = value == true
+    print("Auto Angler toggle: " .. tostring(enabled))
+    if enabled then setStatus("On - checking Angler at " .. selected.name) else setStatus("Off") end
+end})
+statusParagraph = section:AddParagraph({Title="Status", Content=statusText})
+calibrationParagraph = section:AddParagraph({Title="Calibration", Content=calibrationText()})
+section:AddDropdown({
+    Id="auto_angler_location", Title="Bestiary / Angler", Values=locationNames,
+    Default=selected.name, Searchable=true, MaxItems=8,
+    Callback=function(value)
+        for _, row in ipairs(locations) do if row.name == value then selected = row; break end end
+        refreshCalibrationStatus()
+    end
+})
+section:AddButton({Title="Teleport to Angler", Callback=function()
+    if teleportToSelected() then
+        setStatus("Teleported to " .. selected.name)
+    else
+        setStatus("Teleport failed; waiting for your character")
+    end
+end})
+section:AddParagraph({Title="Controls / calibration", Content="1. Open inventory, hover over its search box, and press F7 to save that click spot.\n2. Open Angler dialogue, hover over its top choice, and press F6 once for this location.\n3. Press F4 to turn Auto Angler on or off.\nRecalibrate F7 if the inventory moves; repeat F6 at a different Angler location."})
+
+local state = {running=true, ui=ui}
+state.status = function() return statusText end
+state.isEnabled = function() return enabled end
+state.setEnabled = function(value)
+    enabled = value == true
+    if autoToggle then pcall(function() autoToggle:SetValue(enabled) end) end
+    setStatus(enabled and ("On - checking Angler at " .. selected.name) or "Off")
+end
+_G.AutoAnglerState = state
+local uis = game:GetService("UserInputService")
+local lastF4Toggle = 0
+local lastF7Calibration = 0
+local lastF6Calibration = 0
+local function calibrateDialogueFromKey()
+    if tick() - lastF6Calibration < .35 then return end
+    lastF6Calibration = tick()
+    lastHotkey = "F6"
+    refreshCalibrationStatus()
+    task.spawn(calibrateDialogue)
+end
+local function calibrateSearchFromKey()
+    if tick() - lastF7Calibration < .35 then return end
+    lastF7Calibration = tick()
+    lastHotkey = "F7"
+    refreshCalibrationStatus()
+    calibrateSearch()
+end
+local function toggleFromF4()
+    if tick() - lastF4Toggle < .35 then return end
+    lastF4Toggle = tick()
+    lastHotkey = "F4"
+    refreshCalibrationStatus()
+    local nextValue = not enabled
+    enabled = nextValue
+    if autoToggle then pcall(function() autoToggle:SetValue(nextValue) end) end
+    setStatus(nextValue and ("On - checking Angler at " .. selected.name) or "Off")
+end
+local inputHandle = uis.InputBegan:Connect(function(input)
+    local keyCode = input and input.KeyCode
+    if keyCode == Enum.KeyCode.F4.Value then toggleFromF4() end
+    if keyCode == Enum.KeyCode.F6.Value then calibrateDialogueFromKey() end
+    if keyCode == Enum.KeyCode.F7.Value then calibrateSearchFromKey() end
+end)
+
+task.spawn(function()
+    local wasDown = false
+    while state.running do
+        local ok, pressed = pcall(iskeypressed, 0x76) -- Windows F7
+        local down = ok and pressed == true
+        if down and not wasDown then calibrateSearchFromKey() end
+        wasDown = down
+        task.wait(.05)
+    end
+end)
+
+-- Poll Roblox F-key state as a fallback when InputBegan is consumed.
+task.spawn(function()
+    local wasDown = false
+    while state.running do
+        local ok, pressed = pcall(iskeypressed, 0x73) -- Windows F4
+        local down = ok and pressed == true
+        if down and not wasDown then toggleFromF4() end
+        wasDown = down
+        task.wait(.05)
+    end
+end)
+
+task.spawn(function()
+    local wasDown = false
+    while state.running do
+        local ok, pressed = pcall(iskeypressed, 0x75) -- Windows F6
+        local down = ok and pressed == true
+        if down and not wasDown then calibrateDialogueFromKey() end
+        wasDown = down
+        task.wait(.05)
+    end
+end)
+
+state.stop = function()
+    enabled = false
+    state.running = false
+    pcall(function() inputHandle:Disconnect() end)
+    setStatus("Stopped")
+    pcall(function() ui:Stop() end)
+end
+
+-- Main loop stays responsive to the UI toggle and F4 stop/start key.
+task.spawn(function()
+    state.loopCount = 0
+    while state.running do
+        state.loopCount = state.loopCount + 1
+        if enabled then
+            local ok, err = pcall(runOneQuest)
+            if not ok then setStatus("Error: " .. tostring(err)); warn("Auto Angler: " .. tostring(err)) end
+            task.wait(.5)
+        else
+            task.wait(.15)
+        end
+    end
+end)
+
+print("Auto Angler loaded. F4 toggles; UI toggle also works.")
+
