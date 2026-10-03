@@ -95,7 +95,7 @@ local function autoStep(now,container,reel,symbols)
     signature=table.concat(signature,":")
     if signature~=S.signature then
         release(); S.pending=nil; S.signature=signature; S.next=first
-        S.widths={}; S.setStarted=now; S.complete=false
+        S.widths={}; S.stable={}; S.setStarted=now; S.complete=false
     end
     if S.complete then S.status="Sequence sent - waiting for shuffle"; return end
     local n=S.next or first
@@ -113,24 +113,43 @@ local function autoStep(now,container,reel,symbols)
     -- A shrinking icon is leaving the screen, so wait for another cast.
     if oldWidth and w<oldWidth-1.5 then usable=false end
     if not usable then
+        S.stable[n]=nil
         release(); S.pending=nil; S.status="Waiting for "..names[n]; return
+    end
+    -- Require the rendered icon to hold still across polls. Its asset can be
+    -- present in memory before the GUI has finished placing it on screen.
+    local sample=S.stable[n]
+    if sample and math.abs(sample.x-x)<=3 and math.abs(sample.y-y)<=3 and math.abs(sample.w-w)<=3 and math.abs(sample.h-h)<=3 then
+        sample.count=sample.count+1
+    else
+        sample={x=x,y=y,w=w,h=h,count=1}; S.stable[n]=sample
+    end
+    if sample.count<2 then
+        release(); S.pending=nil; S.status="Waiting for "..names[n].." to appear"; return
     end
     local p=S.pending
     if not p then
         if now<(S.nextClick or 0) then return end
-        -- Pause over the panel, so automatic input cannot toggle its own UI.
+        -- Keep the automation from clicking its own control panel.
         if S.visible and inside(x,y,S.x,S.y,332,191) then S.status="Move this panel away from symbols"; return end
-        mousemoveabs(math.floor(x+0.5),math.floor(y+0.5))
-        S.pending={at=now,phase="move",address=v.Address,x=x,y=y}
+        local targetX,targetY=math.floor(x+0.5),math.floor(y+0.5)
+        -- Place directly on the symbol, then make a tiny hover nudge to wake UI hit testing.
+        mousemoveabs(targetX,targetY)
+        S.pending={at=now,phase="hover",address=v.Address,x=x,y=y,targetX=targetX,targetY=targetY}
         S.status="Clicking "..n.."/12 - "..names[n]
         return
     end
     if p.address~=v.Address then release(); S.pending=nil; return end
-    if p.phase=="move" and now-p.at>=0.055 then
-        mousemoveabs(math.floor(x+0.5),math.floor(y+0.5))
+    if p.phase=="hover" and now-p.at>=0.01 then
+        mousemoveabs(p.targetX+2,p.targetY)
+        mousemoveabs(p.targetX,p.targetY)
+        p.phase="ready"; p.at=now
+    elseif p.phase=="ready" then
         mouse1press(); S.pressed=true; p.phase="press"; p.at=now
-    elseif p.phase=="press" and now-p.at>=0.045 then
-        release(); S.clicks=S.clicks+1; S.pending=nil; S.nextClick=now+0.085
+    elseif p.phase=="press" and now-p.at>=0.05 then
+        release(); p.phase="settle"; p.at=now
+    elseif p.phase=="settle" and now-p.at>=0.025 then
+        S.clicks=S.clicks+1; S.pending=nil; S.nextClick=now+0.015
         S.next=n+1
         if n==12 then S.complete=true; S.rounds=S.rounds+1 end
     end
@@ -181,7 +200,7 @@ S.connection=run.RenderStepped:Connect(function()
         end
         leftWas=left; f6Was=f6; f7Was=f7
         if S.enabled and focused and not dragging then
-            if now-lastPoll>=0.025 then lastPoll=now; automation(now) end
+            if now-lastPoll>=0.01 then lastPoll=now; automation(now) end
         elseif not focused then release(); S.pending=nil; if S.enabled then S.status="Paused - Roblox not focused" end end
         if now-lastPaint>=0.05 then lastPaint=now; render() end
     end)
