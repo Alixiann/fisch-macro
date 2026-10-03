@@ -16,6 +16,23 @@ local names = {"Aries", "Taurus", "Gemini", "Cancer", "Leo", "Virgo", "Libra", "
 local ids = {"87713177367461", "79785331277449", "131660825899150", "112848958832289", "101622591206402", "134568966081333", "78633129282959", "85750329590074", "135640910512677", "118096235948723", "82332081547151", "131990023531922"}
 local rank = {}
 for i,id in ipairs(ids) do rank["rbxassetid://"..id] = i end
+-- Ominous Ouija replaces zodiac art with letters. This rank follows the fixed
+-- hint row above the reel: G, R, I, M, P, L, A, N, C, H, E, T.
+local ouijaIds = {
+    "78615873330926", -- G
+    "75916614515610", -- R
+    "137102149069772", -- I
+    "108545058510356", -- M
+    "77076733461222", -- P
+    "116766582686234", -- L
+    "127724456881024", -- A
+    "95450845021871", -- N
+    "133926737614096", -- C
+    "124096119354511", -- H
+    "117427549022143", -- E
+    "88719768153132", -- T
+}
+for i,id in ipairs(ouijaIds) do rank["rbxassetid://"..id] = i end
 local compatible = getrbxversion() == BUILD
 local function size(v)
     local z = v.AbsoluteSize
