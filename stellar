@@ -124,7 +124,7 @@ local function autoStep(now,container,reel,symbols)
     else
         sample={x=x,y=y,w=w,h=h,count=1}; S.stable[n]=sample
     end
-    if sample.count<2 then
+    if sample.count<1 then
         release(); S.pending=nil; S.status="Waiting for "..names[n].." to appear"; return
     end
     local p=S.pending
@@ -146,10 +146,10 @@ local function autoStep(now,container,reel,symbols)
         p.phase="ready"; p.at=now
     elseif p.phase=="ready" then
         mouse1press(); S.pressed=true; p.phase="press"; p.at=now
-    elseif p.phase=="press" and now-p.at>=0.05 then
+    elseif p.phase=="press" and now-p.at>=0.035 then
         release(); p.phase="settle"; p.at=now
-    elseif p.phase=="settle" and now-p.at>=0.025 then
-        S.clicks=S.clicks+1; S.pending=nil; S.nextClick=now+0.015
+    elseif p.phase=="settle" and now-p.at>=0.01 then
+        S.clicks=S.clicks+1; S.pending=nil; S.nextClick=now
         S.next=n+1
         if n==12 then S.complete=true; S.rounds=S.rounds+1 end
     end
