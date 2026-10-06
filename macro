@@ -2151,11 +2151,13 @@ function _G.__1aAutoSovereign.run()
     if _G.__1aAutoSovereign.busy then return end
     _G.__1aAutoSovereign.busy=true
     task.spawn(function()
+        local inventoryOpened = false
         local ok,err=pcall(function()
             status(_G.__1aAutoSovereign.status,"Boosting Sovereign rod power")
             if not tapKey(0x39) then error("could not equip hotbar slot 9") end
             task.wait(.2)
             if not tapKey(0xC0) then error("could not open inventory") end
+            inventoryOpened = true
             task.wait(.25)
             while alive and macroEnabled and _G.__1aAutoSovereign.enabled do
                 if _G.__1aAutoSovereign.cannotBoostAnymore() then status(_G.__1aAutoSovereign.status,"Rod cannot be boosted anymore"); break end
@@ -2228,6 +2230,10 @@ function _G.__1aAutoSovereign.run()
             end
             end
         end)
+        if inventoryOpened then
+            task.wait(.15)
+            if not tapKey(0xC0) then warn("Auto Sovereign Power: could not close inventory") end
+        end
         if not ok then status(_G.__1aAutoSovereign.status,"Boost stopped: "..tostring(err)); warn("Auto Sovereign Power: "..tostring(err)) end
         _G.__1aAutoSovereign.busy=false
         macroPhase="idle"
