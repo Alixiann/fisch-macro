@@ -1718,7 +1718,7 @@ end})
 _G.__1aUi.macroSection:AddToggle({Title="Auto Sovereign Power",Default=false,Callback=function(v)
     _G.__1aAutoSovereign.enabled=v==true
     if _G.__1aAutoSovereign.status then
-        status(_G.__1aAutoSovereign.status,_G.__1aAutoSovereign.enabled and "Waiting for Sovereign rod power to reach 60% or below" or "Off")
+        status(_G.__1aAutoSovereign.status,_G.__1aAutoSovereign.enabled and "Waiting for Sovereign rod power to reach 90% or below" or "Off")
     end
 end})
 _G.__1aUi.macroSection:AddParagraph({Title="Note",Content="Enchant relics/exalted relics in 9th hotbar slot"})
@@ -2195,6 +2195,7 @@ function _G.__1aAutoSovereign.run()
                     if _G.__1aAutoSovereign.cannotBoostAnymore() then break end
                     task.wait(.1)
                 end
+                if not cooldownHit then
                 task.wait(1.2)
                 local sawBoostResult=false
                 for _=1,50 do
@@ -2207,13 +2208,13 @@ function _G.__1aAutoSovereign.run()
                     local resultButton=content and content:FindFirstChild("confirmButton")
                     if resultButton and _G.__1aAutoSovereign.click(resultButton) then
                         sawBoostResult=true
-                        task.wait(.6)
                         break
                     end
                     local current=_G.__1aAutoSovereign.readRodPower()
                     if current and (current>powerBefore or current>=100) then sawBoostResult=true; break end
                     task.wait(.1)
                 end
+                if sawBoostResult then task.wait(3.5) end
                 if not cooldownHit then
                 if _G.__1aAutoSovereign.cannotBoostAnymore() then status(_G.__1aAutoSovereign.status,"Rod cannot be boosted anymore"); break end
                 local current=_G.__1aAutoSovereign.readRodPower()
@@ -2223,6 +2224,8 @@ function _G.__1aAutoSovereign.run()
                     break
                 end
                 end
+                end
+            end
             end
         end)
         if not ok then status(_G.__1aAutoSovereign.status,"Boost stopped: "..tostring(err)); warn("Auto Sovereign Power: "..tostring(err)) end
@@ -2240,8 +2243,8 @@ task.spawn(function()
             local hasSovereign=_G.__1aAutoSovereign.hasSovereignPower()
             local equippedRod=findFishingRod(player and player.Character)
             local _,_,_,_,reelActive=getReelUi()
-            if power and power>60 then _G.__1aAutoSovereign.armed=true
-            elseif equippedRod and hasSovereign and power and power<=60 and _G.__1aAutoSovereign.armed and not reelActive and not macroWasReeling and macroPhase~="casting" and not activeShakeButton() then
+            if power and power>90 then _G.__1aAutoSovereign.armed=true
+            elseif equippedRod and hasSovereign and power and power<=90 and _G.__1aAutoSovereign.armed and not reelActive and not macroWasReeling and macroPhase~="casting" and not activeShakeButton() then
                 _G.__1aAutoSovereign.armed=false
                 _G.__1aAutoSovereign.run()
             end
