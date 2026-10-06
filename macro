@@ -1,4 +1,4 @@
--- 1a macro: Wabi Sabi automation controls
+-- 1a macro: Wabi Sabi _G.__1aUi.automation controls
 if _G.Stop1aMacro then pcall(_G.Stop1aMacro) end
 if _G.StopFischMacro then pcall(_G.StopFischMacro) end
 local text=game:HttpGet("https://scripts.wabisabi.mom/wabi-sabi-ui-lib.lua")
@@ -30,24 +30,25 @@ end
 local chunk,err=loadstring(text); assert(chunk,err); chunk()
 local ui=WabiSabi; assert(type(ui)=="table","Wabi Sabi failed to initialize")
 ui:SetTheme("Aqua"); ui:SetTranslucent(true)
+_G.__1aUi={}
 local win=ui:CreateWindow({Title="1a",SubTitle="Have Fun Fishing",Size=Vector2.new(560,430),MinSize=Vector2.new(560,430),Resize=false,TabWidth=100,Theme="Aqua",Translucent=true,MinimizeKey="End"})
-local home=win:AddTab({Title="Home"})
-home:AddSection("Welcome"):AddParagraph({
+_G.__1aUi.home=win:AddTab({Title="Home"})
+_G.__1aUi.home:AddSection("Welcome"):AddParagraph({
     Title="Made by 1a",
     Content="Make sure to star the post if you like the script.\n\nCatch 1 fish before enabling Instant Catch to avoid bugs/kicks.\n\nEnable Allow Unsafe Lua for Rod Speed Changer and possibly other features.\n\nMax graphics may cause lag.\n\nStellarwave Melody works best with the speed changer set to .4 - .6 and just have the macro on."
 })
-local macroTab=win:AddTab({Title="Macro"})
-local macroSection=macroTab:AddSection("Casting")
-local automation=win:AddTab({Title="Automation"})
-local section=automation:AddSection("Fishing")
-local fishEspTab=win:AddTab({Title="Fish ESP"})
-local fishEspSection=fishEspTab:AddSection("Roaming Fish")
-local totemTab=win:AddTab({Title="Totem"})
-local totemSection=totemTab:AddSection("Auto Totem")
-local teleportsTab=win:AddTab({Title="Teleports"})
-local etcTab=win:AddTab({Title="Etc"})
-local etcSection=etcTab:AddSection("Etc")
-etcSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function()
+_G.__1aUi.macroTab=win:AddTab({Title="Macro"})
+_G.__1aUi.macroSection=_G.__1aUi.macroTab:AddSection("Casting")
+_G.__1aUi.automation=win:AddTab({Title="Automation"})
+_G.__1aUi.section=_G.__1aUi.automation:AddSection("Fishing")
+_G.__1aUi.fishEspTab=win:AddTab({Title="Fish ESP"})
+_G.__1aUi.fishEspSection=_G.__1aUi.fishEspTab:AddSection("Roaming Fish")
+_G.__1aUi.totemTab=win:AddTab({Title="Totem"})
+_G.__1aUi.totemSection=_G.__1aUi.totemTab:AddSection("Auto Totem")
+_G.__1aUi.teleportsTab=win:AddTab({Title="Teleports"})
+_G.__1aUi.etcTab=win:AddTab({Title="Etc"})
+_G.__1aUi.etcSection=_G.__1aUi.etcTab:AddSection("Etc")
+_G.__1aUi.etcSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function()
     task.spawn(function()
         local ok,err=pcall(function()
             local source=game:HttpGet("https://raw.githubusercontent.com/onlywraith/auto-appraise/refs/heads/main/autoappraise")
@@ -59,7 +60,7 @@ etcSection:AddButton({Title="auto appraisal by @WR@ITH",Callback=function()
     end)
 end})
 local anglerLoading=false
-etcSection:AddButton({Title="Auto Angler",Callback=function()
+_G.__1aUi.etcSection:AddButton({Title="Auto Angler",Callback=function()
     if anglerLoading then return end
     anglerLoading=true
     task.spawn(function()
@@ -82,6 +83,7 @@ local RunService=game:GetService("RunService")
 local alive=true
 local treasureClaimRunning=false
 local instant,instantLoading,instantApplied=false,false,false
+_G.__1aAutoSovereign={enabled=false,busy=false,armed=true,status=nil}
 local instantCache,instantOriginal=nil,nil
 local rod,rodLoading=false,false
 local rodCache,rodOriginal=nil,nil
@@ -325,6 +327,9 @@ local function clickButtonPosition(button)
     end)
     if p and size and size.X>8 and size.Y>8 then return p.X+size.X/2,p.Y+size.Y/2 end
     if titlePos then return titlePos.X+12,titlePos.Y+8 end
+    -- Matcha can report zero AbsoluteSize for visible game buttons; use the observed
+    -- standard button center offset so Enchant/Confirm still receive a real click.
+    if p and (button.ClassName=="TextButton" or button.ClassName=="ImageButton") then return p.X+72,p.Y+19 end
     return nil
 end
 local function readCastPower()
@@ -1703,14 +1708,22 @@ local harpoonAimReadyAt,harpoonAimId=0,nil
       return false
   end
 
-macroToggle=macroSection:AddToggle({Title="Macro",Default=false,Callback=function(v) setMacroEnabled(v) end})
-pMacro=macroSection:AddParagraph({Title="Status",Content="Off"})
-macroKeybind=macroSection:AddKeybind({Title="Macro Keybind",Default="F8",Mode="Hold"})
-macroSection:AddToggle({Title="Perfect Cast",Default=false,Callback=function(v)
+macroToggle=_G.__1aUi.macroSection:AddToggle({Title="Macro",Default=false,Callback=function(v) setMacroEnabled(v) end})
+pMacro=_G.__1aUi.macroSection:AddParagraph({Title="Status",Content="Off"})
+macroKeybind=_G.__1aUi.macroSection:AddKeybind({Title="Macro Keybind",Default="F8",Mode="Hold"})
+_G.__1aUi.macroSection:AddToggle({Title="Perfect Cast",Default=false,Callback=function(v)
     perfectCastEnabled=v==true
     if perfectCastEnabled then scanCastPower() end
 end})
-section:AddToggle({Title="Force Non Perfect Catch",Default=false,Callback=function(v)
+_G.__1aUi.macroSection:AddToggle({Title="Auto Sovereign Power",Default=false,Callback=function(v)
+    _G.__1aAutoSovereign.enabled=v==true
+    if _G.__1aAutoSovereign.status then
+        status(_G.__1aAutoSovereign.status,_G.__1aAutoSovereign.enabled and "Waiting for Sovereign rod power to reach 60% or below" or "Off")
+    end
+end})
+_G.__1aUi.macroSection:AddParagraph({Title="Note",Content="Enchant relics/exalted relics in 9th hotbar slot"})
+_G.__1aAutoSovereign.status=_G.__1aUi.macroSection:AddParagraph({Title="Auto Sovereign Status",Content="Off"})
+_G.__1aUi.section:AddToggle({Title="Force Non Perfect Catch",Default=false,Callback=function(v)
     _G.__1aForceNonPerfectCatch.enabled=v==true
     if not _G.__1aForceNonPerfectCatch.enabled then
         if _G.__1aForceNonPerfectCatch.cache and type(applygcFn)=="function" then
@@ -1727,11 +1740,12 @@ section:AddToggle({Title="Force Non Perfect Catch",Default=false,Callback=functi
         end
     end
 end})
-section:AddToggle({Title="Instant Catch",Default=false,Callback=function(v) toggleInstant(v==true) end})
-section:AddToggle({Title="Harpoon Pull",Default=false,Callback=function(v) harpoon=v==true; status(pHarpoon,harpoon and "On" or "Off") end})
-slider=section:AddSlider({Title="Rod Speed Value",Min=-1,Max=1,Default=0,Rounding=1,Callback=function(v) if not sliderUpdating then setRodValue(v) end end})
-section:AddToggle({Title="Rod Speed",Default=false,Callback=function(v) toggleRod(v==true) end})
-section:AddButton({Title="Stellar Wave",Callback=function()
+_G.__1aUi.section:AddToggle({Title="Instant Catch",Default=false,Callback=function(v) toggleInstant(v==true) end})
+
+_G.__1aUi.section:AddToggle({Title="Harpoon Pull",Default=false,Callback=function(v) harpoon=v==true; status(pHarpoon,harpoon and "On" or "Off") end})
+slider=_G.__1aUi.section:AddSlider({Title="Rod Speed Value",Min=-1,Max=1,Default=0,Rounding=1,Callback=function(v) if not sliderUpdating then setRodValue(v) end end})
+_G.__1aUi.section:AddToggle({Title="Rod Speed",Default=false,Callback=function(v) toggleRod(v==true) end})
+_G.__1aUi.section:AddButton({Title="Stellar Wave",Callback=function()
     if stellarLoading then return end
     stellarLoading=true; status(pStellar,"Loading…")
     task.spawn(function()
@@ -1744,7 +1758,7 @@ section:AddButton({Title="Stellar Wave",Callback=function()
         if not ok then warn("Stellar Wave: "..tostring(e)) end
     end)
 end})
-fishEspInputHandle=fishEspSection:AddInput({
+fishEspInputHandle=_G.__1aUi.fishEspSection:AddInput({
     Id="fish_esp_name",Title="Fish name",Default="",Placeholder="Type one fish name",
     MaxLength=64,Callback=function(value)
         fishEsp.text=tostring(value or "")
@@ -1755,98 +1769,99 @@ fishEspInputHandle=fishEspSection:AddInput({
         if fishEsp.enabled then status(fishEspStatus,"Search updated; scanning again...") end
     end
 })
-fishEspToggle=fishEspSection:AddToggle({
+fishEspToggle=_G.__1aUi.fishEspSection:AddToggle({
     Id="fish_esp_enabled",Title="Fish ESP",Default=false,
     Callback=function(value) setFishEspEnabled(value) end
 })
-fishEspStatus=fishEspSection:AddParagraph({Title="Status",Content="Off"})
-totemSection:AddParagraph({
+fishEspStatus=_G.__1aUi.fishEspSection:AddParagraph({Title="Status",Content="Off"})
+_G.__1aUi.totemSection:AddParagraph({
     Title="Required hotbar items",
     Content="Sundials use the 8th hotbar slot\nLuck Totem uses the 9th hotbar slot\nAurora / Tropical Sun / Rainbow\nPlace both totems before enabling"
 })
-totemToggle=totemSection:AddToggle({
+totemToggle=_G.__1aUi.totemSection:AddToggle({
     Id="auto_totem",Title="Auto Totem",Default=false,
     Callback=function(value) setAutoTotemEnabled(value) end
 })
-pTotemStatus=totemSection:AddParagraph({Title="Status",Content="Off"})
-local npcSection=teleportsTab:AddSection("NPCs")
-local selectedNpc=npcRows[1].name
-npcSection:AddDropdown({
+pTotemStatus=_G.__1aUi.totemSection:AddParagraph({Title="Status",Content="Off"})
+local teleUI={}
+teleUI.npcSection=_G.__1aUi.teleportsTab:AddSection("NPCs")
+teleUI.selectedNpc=npcRows[1].name
+teleUI.npcSection:AddDropdown({
     Id="teleport_npc",Title="Destination",Values=rowValues(npcRows),
-    Default=selectedNpc,Searchable=true,MaxItems=6,
-    Callback=function(value) selectedNpc=value end
+    Default=teleUI.selectedNpc,Searchable=true,MaxItems=6,
+    Callback=function(value) teleUI.selectedNpc=value end
 })
-npcSection:AddButton({
+teleUI.npcSection:AddButton({
     Title="Teleport to NPC",Callback=function()
-        for _,row in ipairs(npcRows) do if row.name==selectedNpc then teleportNpc(row); return end end
+        for _,row in ipairs(npcRows) do if row.name==teleUI.selectedNpc then teleportNpc(row); return end end
         setTeleportStatus("Choose an NPC destination first.")
     end
 })
-local treasureChestSection=teleportsTab:AddSection("Treasure Chests")
-treasureChestSection:AddButton({
+teleUI.treasureChestSection=_G.__1aUi.teleportsTab:AddSection("Treasure Chests")
+teleUI.treasureChestSection:AddButton({
     Title="Claim Revealed Treasure Chests",Callback=function() claimRevealedTreasureChests() end
 })
-treasureChestSection:AddButton({
+teleUI.treasureChestSection:AddButton({
     Title="Scan for Sunken Chests",Callback=function() teleportSunkenChest() end
 })
-treasureChestSection:AddParagraph({
+teleUI.treasureChestSection:AddParagraph({
     Title="Sunken chests",Content="Scans loaded objects in this server and moves you to the nearest sunken chest."
 })
-local islandSection=teleportsTab:AddSection("Islands")
-local selectedIsland=islandRows[1].name
-islandSection:AddDropdown({
+teleUI.islandSection=_G.__1aUi.teleportsTab:AddSection("Islands")
+teleUI.selectedIsland=islandRows[1].name
+teleUI.islandSection:AddDropdown({
     Id="teleport_island",Title="Destination",Values=rowValues(islandRows),
-    Default=selectedIsland,Searchable=true,MaxItems=6,
-    Callback=function(value) selectedIsland=value end
+    Default=teleUI.selectedIsland,Searchable=true,MaxItems=6,
+    Callback=function(value) teleUI.selectedIsland=value end
 })
-islandSection:AddButton({
+teleUI.islandSection:AddButton({
     Title="Teleport to Island",Callback=function()
-        for _,row in ipairs(islandRows) do if row.name==selectedIsland then teleportIsland(row); return end end
+        for _,row in ipairs(islandRows) do if row.name==teleUI.selectedIsland then teleportIsland(row); return end end
         setTeleportStatus("Choose an island first.")
     end
 })
-local crateSection=teleportsTab:AddSection("Crates")
-local selectedCrate=crateRows[1].name
-crateSection:AddDropdown({
+teleUI.crateSection=_G.__1aUi.teleportsTab:AddSection("Crates")
+teleUI.selectedCrate=crateRows[1].name
+teleUI.crateSection:AddDropdown({
     Id="teleport_crate",Title="Destination",Values=rowValues(crateRows),
-    Default=selectedCrate,Searchable=true,MaxItems=6,
-    Callback=function(value) selectedCrate=value end
+    Default=teleUI.selectedCrate,Searchable=true,MaxItems=6,
+    Callback=function(value) teleUI.selectedCrate=value end
 })
-crateSection:AddButton({
+teleUI.crateSection:AddButton({
     Title="Teleport to Crate",Callback=function()
-        for _,row in ipairs(crateRows) do if row.name==selectedCrate then teleportCrate(row); return end end
+        for _,row in ipairs(crateRows) do if row.name==teleUI.selectedCrate then teleportCrate(row); return end end
         setTeleportStatus("Choose a crate first.")
     end
 })
-local totemTeleportSection=teleportsTab:AddSection("Totems")
-local selectedTotem=totemRows[1].name
-totemTeleportSection:AddDropdown({
+teleUI.totemTeleportSection=_G.__1aUi.teleportsTab:AddSection("Totems")
+teleUI.selectedTotem=totemRows[1].name
+teleUI.totemTeleportSection:AddDropdown({
     Id="teleport_totem",Title="Destination",Values=rowValues(totemRows),
-    Default=selectedTotem,Searchable=true,MaxItems=6,
-    Callback=function(value) selectedTotem=value end
+    Default=teleUI.selectedTotem,Searchable=true,MaxItems=6,
+    Callback=function(value) teleUI.selectedTotem=value end
 })
-totemTeleportSection:AddButton({
+teleUI.totemTeleportSection:AddButton({
     Title="Teleport to Totem",Callback=function()
-        for _,row in ipairs(totemRows) do if row.name==selectedTotem then teleportTotem(row); return end end
+        for _,row in ipairs(totemRows) do if row.name==teleUI.selectedTotem then teleportTotem(row); return end end
         setTeleportStatus("Choose a totem first.")
     end
 })
-local gpsSection=teleportsTab:AddSection("Custom GPS")
-local gpsText=""
-gpsSection:AddInput({
+teleUI.gpsSection=_G.__1aUi.teleportsTab:AddSection("Custom GPS")
+teleUI.gpsText=""
+teleUI.gpsSection:AddInput({
     Id="custom_gps",Title="Coordinates (X, Y, Z)",Default="",
     Placeholder="-23525, 2630, -5750",MaxLength=80,
-    Callback=function(value) gpsText=tostring(value or "") end
+    Callback=function(value) teleUI.gpsText=tostring(value or "") end
 })
-gpsSection:AddButton({
-    Title="Teleport to Coordinates",Callback=function() teleportGps(gpsText) end
+teleUI.gpsSection:AddButton({
+    Title="Teleport to Coordinates",Callback=function() teleportGps(teleUI.gpsText) end
 })
-gpsSection:AddParagraph({
+teleUI.gpsSection:AddParagraph({
     Title="Coordinate format",
     Content="Type three numbers separated by commas: X, Y, Z."
 })
-local teleportStatusSection=teleportsTab:AddSection("Status")
-teleportsStatus=teleportStatusSection:AddParagraph({Title="Teleport",Content="Ready"})
+teleUI.teleportStatusSection=_G.__1aUi.teleportsTab:AddSection("Status")
+teleportsStatus=teleUI.teleportStatusSection:AddParagraph({Title="Teleport",Content="Ready"})
 task.spawn(function()
     while alive do
         if autoTotem.enabled then
@@ -2024,6 +2039,216 @@ local function getReelUi()
     local active=reel~=nil and bar~=nil and fish~=nil and playerbar~=nil
     return reel,bar,fish,playerbar,active
 end
+function _G.__1aAutoSovereign.readRodPower()
+    local pg=player and player:FindFirstChild("PlayerGui")
+    local backpack=pg and pg:FindFirstChild("backpack")
+    local hotbar=backpack and backpack:FindFirstChild("hotbar")
+    local folder=hotbar and hotbar:FindFirstChild("Folder")
+    local frame=folder and folder:FindFirstChild("Frame")
+    local powerbar=frame and frame:FindFirstChild("powerbar")
+    local bar=powerbar and powerbar:FindFirstChild("bar")
+    local label=bar and bar:FindFirstChild("powerLabel")
+    local text=label and tostring(label.Text or "") or ""
+    local percent=tonumber(text:match("([%d%.]+)%s*%%"))
+    if percent and text:lower():find("power",1,true) then return percent,text,true end
+    return nil,text,false
+end
+function _G.__1aAutoSovereign.hasSovereignPower()
+    local percent,text,hasMeter=_G.__1aAutoSovereign.readRodPower()
+    if not hasMeter then return false end
+    if text:lower():find("sovereign",1,true) then return true end
+    return percent~=nil and text:lower():find("power",1,true)~=nil
+end
+function _G.__1aAutoSovereign.handleAltarRecharge()
+    local pg=player and player:FindFirstChild("PlayerGui")
+    local prompt=pg and pg:FindFirstChild("PromptConfirmation")
+    local frame=prompt and prompt:FindFirstChild("Frame")
+    local header=frame and frame:FindFirstChild("Header")
+    local body=frame and frame:FindFirstChild("Body")
+    local options=frame and frame:FindFirstChild("Options")
+    if not frame then return false end
+    local function rechargeText()
+        local value=""
+        pcall(function()
+            value=tostring(header and header.Text or "").." "..tostring(body and body.Text or "")
+        end)
+        local visible
+        pcall(function() visible=frame.Visible end)
+        if visible==false then return false end
+        return value:lower():find("recharg",1,true)~=nil
+    end
+    if not rechargeText() then return false end
+    status(_G.__1aAutoSovereign.status,"Altar recharging; waiting to retry")
+    local clicked=false
+    for _=1,120 do
+        if not rechargeText() then
+            task.wait(2)
+            return true
+        end
+        if not clicked and options then
+            for _,button in ipairs(options:GetChildren()) do
+                local label=button:FindFirstChild("Label")
+                local choice=""
+                pcall(function() choice=tostring(label and label.Text or "") end)
+                local lower=choice:lower()
+                if lower:find("okay",1,true) or lower:find("[ok]",1,true) then
+                    if not choice:match("%(%s*%d+%s*%)") and _G.__1aAutoSovereign.click(button) then
+                        clicked=true
+                        task.wait(.25)
+                        break
+                    end
+                end
+            end
+        end
+        task.wait(.25)
+    end
+    return true
+end
+function _G.__1aAutoSovereign.cannotBoostAnymore()
+    local pg=player and player:FindFirstChild("PlayerGui")
+    local hud=pg and pg:FindFirstChild("hud")
+    local safe=hud and hud:FindFirstChild("safezone")
+    local announcements=safe and safe:FindFirstChild("announcements")
+    local announcer=announcements and announcements:FindFirstChild("announcer")
+    local popup=announcer and announcer:FindFirstChild("popupNotif")
+    local content=popup and popup:FindFirstChild("notifContent")
+    local backpack=pg and pg:FindFirstChild("backpack")
+    local inventory=backpack and backpack:FindFirstChild("inventory")
+    local confirmation=inventory and inventory:FindFirstChild("Confirmation")
+    local enchantConfirm=safe and safe:FindFirstChild("EnchantConfirm")
+    local labels={content and content:FindFirstChild("header") or false,content and content:FindFirstChild("body") or false,confirmation and confirmation:FindFirstChild("Title") or false,enchantConfirm and enchantConfirm:FindFirstChild("header") or false,enchantConfirm and enchantConfirm:FindFirstChild("body") or false}
+    for _,label in ipairs(labels) do
+        local value=""
+        pcall(function() value=tostring(label and label.Text or "") end)
+        local normalized=value:lower():gsub("’","'"):gsub("[^%a%d]+"," ")
+        if normalized:find("cant boost rod anymore",1,true) or (normalized:find("boost",1,true) and normalized:find("anymore",1,true)) then return true end
+    end
+    return false
+end
+function _G.__1aAutoSovereign.click(button)
+    if not button or type(moveFn)~="function" or type(clickFn)~="function" then return false end
+    local x,y=clickButtonPosition(button)
+    if not x or not y then return false end
+    pcall(moveFn,x,y)
+    task.wait(.12)
+    return pcall(clickFn)
+end
+function _G.__1aAutoSovereign.findEnchantControls()
+    local pg=player and player:FindFirstChild("PlayerGui")
+    local backpack=pg and pg:FindFirstChild("backpack")
+    local inventory=backpack and backpack:FindFirstChild("inventory")
+    local top=inventory and inventory:FindFirstChild("TopButtons")
+    local confirmation=inventory and inventory:FindFirstChild("Confirmation")
+    local title=confirmation and confirmation:FindFirstChild("Title")
+    local hud=pg and pg:FindFirstChild("hud")
+    local safe=hud and hud:FindFirstChild("safezone")
+    local final=safe and safe:FindFirstChild("EnchantConfirm")
+    local finalHeader=final and final:FindFirstChild("header")
+    local finalButton=final and final:FindFirstChild("enchantButton")
+    return top and top:FindFirstChild("Enchant"),confirmation and confirmation:FindFirstChild("Confirm"),title,finalHeader,finalButton
+end
+function _G.__1aAutoSovereign.run()
+    if _G.__1aAutoSovereign.busy then return end
+    _G.__1aAutoSovereign.busy=true
+    task.spawn(function()
+        local ok,err=pcall(function()
+            status(_G.__1aAutoSovereign.status,"Boosting Sovereign rod power")
+            if not tapKey(0x39) then error("could not equip hotbar slot 9") end
+            task.wait(.2)
+            if not tapKey(0xC0) then error("could not open inventory") end
+            task.wait(.25)
+            while alive and macroEnabled and _G.__1aAutoSovereign.enabled do
+                if _G.__1aAutoSovereign.cannotBoostAnymore() then status(_G.__1aAutoSovereign.status,"Rod cannot be boosted anymore"); break end
+                if _G.__1aAutoSovereign.handleAltarRecharge() then continue end
+                local power=_G.__1aAutoSovereign.readRodPower()
+                if power and power>=100 then status(_G.__1aAutoSovereign.status,"Rod power reached 100%"); break end
+                local powerBefore=power or 0
+                local enchant,confirm,title,finalHeader,finalButton=_G.__1aAutoSovereign.findEnchantControls()
+                if not enchant then error("inventory Enchant button not found") end
+                if not _G.__1aAutoSovereign.click(enchant) then error("could not click Enchant") end
+                local confirmed=false
+                local cooldownHit=false
+                for _=1,30 do
+                    if not alive or not macroEnabled or not _G.__1aAutoSovereign.enabled then return end
+                    if _G.__1aAutoSovereign.handleAltarRecharge() then cooldownHit=true; break end
+                    enchant,confirm,title,finalHeader,finalButton=_G.__1aAutoSovereign.findEnchantControls()
+                    local titleText=""
+                    pcall(function() titleText=tostring(title and title.Text or "") end)
+                    if confirm and titleText:lower():find("enchant",1,true) then
+                        if not _G.__1aAutoSovereign.click(confirm) then error("could not click Enchant confirmation") end
+                        confirmed=true
+                        break
+                    end
+                    task.wait(.1)
+                end
+                if not cooldownHit then
+                if not confirmed then error("Enchant confirmation did not appear") end
+                for _=1,30 do
+                    if not alive or not macroEnabled or not _G.__1aAutoSovereign.enabled then return end
+                    if _G.__1aAutoSovereign.handleAltarRecharge() then cooldownHit=true; break end
+                    enchant,confirm,title,finalHeader,finalButton=_G.__1aAutoSovereign.findEnchantControls()
+                    local prompt=""
+                    pcall(function() prompt=tostring(finalHeader and finalHeader.Text or "") end)
+                    if finalButton and prompt:lower():find("sovereign relic",1,true) then
+                        if _G.__1aAutoSovereign.click(finalButton) then break end
+                    end
+                    if _G.__1aAutoSovereign.cannotBoostAnymore() then break end
+                    task.wait(.1)
+                end
+                task.wait(1.2)
+                local sawBoostResult=false
+                for _=1,50 do
+                    if _G.__1aAutoSovereign.handleAltarRecharge() then cooldownHit=true; break end
+                    if _G.__1aAutoSovereign.cannotBoostAnymore() then break end
+                    local pg=player and player:FindFirstChild("PlayerGui")
+                    local result=pg and pg:FindFirstChild("sovereignEnchant")
+                    local container=result and result:FindFirstChild("sovContainer")
+                    local content=container and container:FindFirstChild("uiContent")
+                    local resultButton=content and content:FindFirstChild("confirmButton")
+                    if resultButton and _G.__1aAutoSovereign.click(resultButton) then
+                        sawBoostResult=true
+                        task.wait(.6)
+                        break
+                    end
+                    local current=_G.__1aAutoSovereign.readRodPower()
+                    if current and (current>powerBefore or current>=100) then sawBoostResult=true; break end
+                    task.wait(.1)
+                end
+                if not cooldownHit then
+                if _G.__1aAutoSovereign.cannotBoostAnymore() then status(_G.__1aAutoSovereign.status,"Rod cannot be boosted anymore"); break end
+                local current=_G.__1aAutoSovereign.readRodPower()
+                if current and current>=100 then status(_G.__1aAutoSovereign.status,"Rod power reached 100%"); break end
+                if not sawBoostResult then
+                    status(_G.__1aAutoSovereign.status,"No boost result detected; stopped safely")
+                    break
+                end
+                end
+            end
+        end)
+        if not ok then status(_G.__1aAutoSovereign.status,"Boost stopped: "..tostring(err)); warn("Auto Sovereign Power: "..tostring(err)) end
+        _G.__1aAutoSovereign.busy=false
+        macroPhase="idle"
+        macroWasReeling=false
+        macroNextCast=tick()+.15
+        setMacroMouse(false)
+    end)
+end
+task.spawn(function()
+    while alive do
+        if macroEnabled and _G.__1aAutoSovereign.enabled and not _G.__1aAutoSovereign.busy then
+            local power=_G.__1aAutoSovereign.readRodPower()
+            local hasSovereign=_G.__1aAutoSovereign.hasSovereignPower()
+            local equippedRod=findFishingRod(player and player.Character)
+            local _,_,_,_,reelActive=getReelUi()
+            if power and power>60 then _G.__1aAutoSovereign.armed=true
+            elseif equippedRod and hasSovereign and power and power<=60 and _G.__1aAutoSovereign.armed and not reelActive and not macroWasReeling and macroPhase~="casting" and not activeShakeButton() then
+                _G.__1aAutoSovereign.armed=false
+                _G.__1aAutoSovereign.run()
+            end
+        end
+        task.wait(.25)
+    end
+end)
 task.spawn(function()
     local keyWasDown=false
     while alive do
@@ -2047,7 +2272,14 @@ task.spawn(function()
             if rod and rod.Name=="Stellarwave Melody" then ensureStellarWave() end
             local reel,bar,fish,playerbar,reelActive=getReelUi()
 
-            if reelActive then
+            if _G.__1aAutoSovereign.busy then
+                setMacroMouse(false)
+                macroPhase="idle"
+                macroWasReeling=false
+                resetMacroTracking()
+                setMacroStatus("Auto Sovereign Power - boosting rod")
+                task.wait(.05)
+            elseif reelActive then
                 if rod and rod.Name=="Stellarwave Melody" then
                     macroPhase="tracking"
                     macroWasReeling=true
@@ -2167,7 +2399,7 @@ task.spawn(function()
 end)
 _G.Stop1aMacro=function()
     if not alive then return end
-    alive=false; resetInstant(); resetRod(); harpoon=false; macroEnabled=false; perfectCastEnabled=false
+    alive=false; resetInstant(); resetRod(); harpoon=false; macroEnabled=false; perfectCastEnabled=false; _G.__1aAutoSovereign.enabled=false
     _G.__1aForceNonPerfectCatch.enabled=false
     if _G.__1aForceNonPerfectCatch.cache and type(applygcFn)=="function" then pcall(applygcFn,_G.__1aForceNonPerfectCatch.cache,"perfect",true) end
     _G.__1aForceNonPerfectCatch.cache=nil
