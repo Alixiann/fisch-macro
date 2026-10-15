@@ -1,7 +1,13 @@
 -- Stellarwave Melody symbol clicker for Matcha.
 -- F6: toggle. F7: show/hide. X: unload. Drag the title to move.
--- Read-only UI memory fallback is pinned to the verified Roblox build.
-local BUILD = "version-cec3ad5889b447cf"
+-- Read-only UI offsets verified against the running Roblox build on 2026-10-14.
+-- Keep unknown builds disabled rather than reading stale memory offsets.
+local READERS = {
+    ["version-cec3ad5889b447cf"] = { image = 0xa30, width = 0x104, height = 0x108 },
+    ["version-7a0c6d10fcb34a2c"] = { image = 0xa78, width = 0x104, height = 0x108 },
+}
+local BUILD = getrbxversion()
+local reader = READERS[BUILD]
 if _G.StellarwaveMelodyGUI and _G.StellarwaveMelodyGUI.Stop then
     _G.StellarwaveMelodyGUI.Stop()
 end
@@ -33,19 +39,21 @@ local ouijaIds = {
     "88719768153132", -- T
 }
 for i,id in ipairs(ouijaIds) do rank["rbxassetid://"..id] = i end
-local compatible = getrbxversion() == BUILD
+local compatible = reader ~= nil
 local function size(v)
     local z = v.AbsoluteSize
     if z and z.X > 0 and z.Y > 0 then return z.X,z.Y end
     if not compatible then return 0,0 end
-    return memory_read("float",v.Address+0x104),memory_read("float",v.Address+0x108)
+    return memory_read("float",v.Address+reader.width),memory_read("float",v.Address+reader.height)
 end
 local function imageId(v)
     if not v then return nil end
     if not compatible then return nil end
-    local ptr = memory_read("uintptr",v.Address+0xa30)
-    if not ptr or ptr < 65536 then return nil end
-    return memory_read("string",ptr,48)
+    local ptr = memory_read("uintptr",v.Address+reader.image)
+    if not ptr or ptr < 65536 or ptr >= 140737488355328 then return nil end
+    local asset = memory_read("string",ptr,64)
+    local id = asset and (string.match(asset,"rbxassetid://(%d+)") or string.match(asset,"[?&]id=(%d+)"))
+    return id and ("rbxassetid://"..id) or nil
 end
 local function release()
     if S.pressed then mouse1release(); S.pressed=false end
@@ -229,4 +237,5 @@ end)
 S.SetEnabled(false)
 render()
 print("Stellarwave GUI loaded. F6 toggles, F7 hides, X unloads.")
+
 
