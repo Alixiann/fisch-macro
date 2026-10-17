@@ -1,10 +1,11 @@
 -- Stellarwave Melody symbol clicker for Matcha.
 -- F6: toggle. F7: show/hide. X: unload. Drag the title to move.
--- Read-only UI offsets verified against the running Roblox build on 2026-10-14.
+-- Read-only UI offsets verified against the running Roblox build on 2026-10-17.
 -- Keep unknown builds disabled rather than reading stale memory offsets.
 local READERS = {
     ["version-cec3ad5889b447cf"] = { image = 0xa30, width = 0x104, height = 0x108 },
     ["version-7a0c6d10fcb34a2c"] = { image = 0xa78, width = 0x104, height = 0x108 },
+    ["version-11f155f3450f4c8e"] = { image = 0xa78, width = 0x104, height = 0x108 },
 }
 local BUILD = getrbxversion()
 local reader = READERS[BUILD]
