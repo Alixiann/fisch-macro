@@ -1,8 +1,9 @@
 -- Stellarwave Melody symbol clicker for Matcha.
 -- F6: toggle. F7: show/hide. X: unload. Drag the title to move.
--- Read-only UI offsets verified against the running Roblox build on 2026-10-17.
+-- Read-only UI image and size offsets checked on build version-9ac8595712b447a7 on 2026-10-24.
 -- Keep unknown builds disabled rather than reading stale memory offsets.
 local READERS = {
+    ["version-9ac8595712b447a7"] = { image = 0xaa8, width = 0xfc, height = 0x100, preferRawSize = true },
     ["version-cec3ad5889b447cf"] = { image = 0xa30, width = 0x104, height = 0x108 },
     ["version-7a0c6d10fcb34a2c"] = { image = 0xa78, width = 0x104, height = 0x108 },
     ["version-11f155f3450f4c8e"] = { image = 0xa78, width = 0x104, height = 0x108 },
@@ -42,6 +43,12 @@ local ouijaIds = {
 for i,id in ipairs(ouijaIds) do rank["rbxassetid://"..id] = i end
 local compatible = reader ~= nil
 local function size(v)
+    if compatible and reader.preferRawSize then
+        local w = memory_read("float", v.Address + reader.width)
+        local h = memory_read("float", v.Address + reader.height)
+        if w and h and w == w and h == h and w >= 0 and h >= 0 and w <= 16384 and h <= 16384 then return w, h end
+        return 0, 0
+    end
     local z = v.AbsoluteSize
     if z and z.X > 0 and z.Y > 0 then return z.X,z.Y end
     if not compatible then return 0,0 end
@@ -238,6 +245,7 @@ end)
 S.SetEnabled(false)
 render()
 print("Stellarwave GUI loaded. F6 toggles, F7 hides, X unloads.")
+
 
 
 
