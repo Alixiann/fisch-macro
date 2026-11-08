@@ -41,8 +41,8 @@ local READERS = {
     ["version-7a0c6d10fcb34a2c"] = { image = 0xa78, width = 0x104, height = 0x108 },
     ["version-11f155f3450f4c8e"] = { image = 0xa78, width = 0x104, height = 0x108 },
 }
-local reader = READERS[getrbxversion()]
-local compatible = reader ~= nil
+local reader = READERS[getrbxversion()] or { image = 0xa78, width = 0xfc, height = 0x100 }
+local compatible = true
 local function size(v)
     if not v then return 0, 0 end
     local w = memory_read("float", v.Address + reader.width)
@@ -233,7 +233,7 @@ S.connection=run.RenderStepped:Connect(function()
         if now-lastPaint>=0.05 then lastPaint=now; render() end
     end)
     if not ok then
-        release(); S.enabled=false; S.pending=nil; S.status="Stopped: reader error"; S.lastError=tostring(err)
+        release(); S.enabled=false; S.pending=nil; S.status="Stopped: offset/read error"; S.lastError=tostring(err)
         warn("Stellarwave: "..tostring(err)); pcall(render)
     end
 end)
