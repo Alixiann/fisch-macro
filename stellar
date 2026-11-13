@@ -40,13 +40,15 @@ local READERS = {
     ["version-cec3ad5889b447cf"] = { image = 0xa30, width = 0x104, height = 0x108 },
     ["version-7a0c6d10fcb34a2c"] = { image = 0xa78, width = 0x104, height = 0x108 },
     ["version-11f155f3450f4c8e"] = { image = 0xa78, width = 0x104, height = 0x108 },
+    ["version-4ea8e85481e34f46"] = { image = 0xa78, width = 0xfc, height = 0x100 },
 }
 local reader = READERS[getrbxversion()] or { image = 0xa78, width = 0xfc, height = 0x100 }
 local compatible = true
 local function size(v)
     if not v then return 0, 0 end
-    local w = memory_read("float", v.Address + reader.width)
-    local h = memory_read("float", v.Address + reader.height)
+    local absoluteSize=v.AbsoluteSize
+    local w=absoluteSize and absoluteSize.X or 0
+    local h=absoluteSize and absoluteSize.Y or 0
     if w and h and w == w and h == h and w >= 0 and h >= 0 and w <= 16384 and h <= 16384 then return w, h end
     return 0, 0
 end
@@ -185,9 +187,11 @@ end
 local function automation(now)
     -- Re-resolve the short live UI path. No game-wide scans or game-state writes.
     local pg=player:FindFirstChild("PlayerGui")
+    local modern=pg and pg:FindFirstChild("StarRiddles")
+    local modernWheel=modern and modern:FindFirstChild("wheel")
     local reel=pg and pg:FindFirstChild("reel")
     local bar=reel and reel:FindFirstChild("bar")
-    local container=bar and bar:FindFirstChild("signContainer")
+    local container=(bar and bar:FindFirstChild("signContainer")) or modernWheel
     if not container then
         release(); S.pending=nil; S.container=nil; S.signature=nil; S.status="Waiting for symbols"; return
     end
