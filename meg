@@ -1,5 +1,5 @@
 -- Megalodon ESP 2.4 (Matcha)
--- Toggle: Z | Status text at top centre | Stop: _G.MegESP.stop()
+-- Toggle: Z | Unload: P | Status text at top centre | Stop: _G.MegESP.stop()
 
 if _G.MegESP then pcall(_G.MegESP.stop) end
 
@@ -12,6 +12,7 @@ local cam = ws:FindFirstChild("Camera")
 
 local POOL = 8
 local TOGGLE_KEY = Enum.KeyCode.Z.Value or 122
+local UNLOAD_KEY = Enum.KeyCode.P.Value or 80
 local state = { running = true, enabled = true, targets = {} }
 
 local function isPart(o)
@@ -94,6 +95,10 @@ end)
 local keyConn = UIS.InputBegan:Connect(function(input)
   if input.KeyCode == TOGGLE_KEY then
     state.enabled = not state.enabled
+  elseif input.KeyCode == UNLOAD_KEY then
+    if _G.MegESP and type(_G.MegESP.stop) == "function" then
+      pcall(_G.MegESP.stop)
+    end
   end
 end)
 
@@ -143,10 +148,10 @@ local renderConn = RunService.RenderStepped:Connect(function()
 
   local onoff = state.enabled and "ON" or "OFF"
   if #list > 0 then
-    status.Text = "Megalodon ESP [Z]: " .. onoff .. "  |  FOUND x" .. #list .. "  -  " .. (nearest or 0) .. "m"
+    status.Text = "Megalodon ESP [Z] toggle | [P] unload: " .. onoff .. "  |  FOUND x" .. #list .. "  -  " .. (nearest or 0) .. "m"
     status.Color = state.enabled and Color3.fromRGB(80, 255, 120) or Color3.fromRGB(200, 200, 200)
   else
-    status.Text = "Megalodon ESP [Z]: " .. onoff .. "  |  Not spawned / not loaded"
+    status.Text = "Megalodon ESP [Z] toggle | [P] unload: " .. onoff .. "  |  Not spawned / not loaded"
     status.Color = state.enabled and Color3.fromRGB(255, 200, 60) or Color3.fromRGB(200, 200, 200)
   end
   status.Position = Vector2.new(cx, 8)
