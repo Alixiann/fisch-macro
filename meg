@@ -1,0 +1,162 @@
+-- Megalodon ESP 2.4 (Matcha)
+-- Toggle: Z | Status text at top centre | Stop: _G.MegESP.stop()
+
+if _G.MegESP then pcall(_G.MegESP.stop) end
+
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local lp = Players.LocalPlayer
+local ws = workspace
+local cam = ws:FindFirstChild("Camera")
+
+local POOL = 8
+local TOGGLE_KEY = Enum.KeyCode.Z.Value or 122
+local state = { running = true, enabled = true, targets = {} }
+
+local function isPart(o)
+  local c = o.ClassName
+  return c == "Part" or c == "MeshPart" or c == "UnionOperation"
+end
+
+local function resolvePart(o)
+  if isPart(o) then return o end
+  local pp = o.PrimaryPart
+  if pp then return pp end
+  for _, c in ipairs(o:GetChildren()) do
+    if isPart(c) then return c end
+  end
+  for _, c in ipairs(o:GetDescendants()) do
+    if isPart(c) then return c end
+  end
+end
+
+local function isMeg(name)
+  return string.find(string.lower(name), "megalodon") ~= nil
+end
+
+-- pool
+local pool = {}
+for i = 1, POOL do
+  local box = Drawing.new("Square"); box.Thickness = 2; box.Filled = false
+  box.Color = Color3.fromRGB(255, 60, 60); box.Visible = false
+  local tag = Drawing.new("Text"); tag.Size = 15; tag.Center = true; tag.Outline = true
+  tag.Color = Color3.fromRGB(255, 90, 90); tag.Visible = false
+  local line = Drawing.new("Line"); line.Thickness = 1.5
+  line.Color = Color3.fromRGB(255, 60, 60); line.Visible = false
+  pool[i] = { box = box, tag = tag, line = line }
+end
+local status = Drawing.new("Text")
+status.Size = 20; status.Center = true; status.Outline = true; status.Font = 2
+status.Visible = true
+
+-- collector: cheap targeted scan every 1s, full sweep every 8s
+task.spawn(function()
+  local tick0 = 0
+  while state.running do
+    local out = {}
+    local function consider(o)
+      if #out < POOL and isMeg(o.Name) then
+        if o.ClassName == "Model" or isPart(o) then
+          local p = resolvePart(o)
+          local pos = p and p.Position
+          -- the hunt spawns as a zone Part ("Megalodon Default"); dead refs read nil
+          if pos then out[#out + 1] = { name = o.Name, part = p, lastPos = pos, size = p.Size } end
+        end
+      end
+    end
+    local roots = { ws }
+    local zones = ws:FindFirstChild("zones")
+    local fishing = zones and zones:FindFirstChild("fishing")
+    if fishing then roots[#roots + 1] = fishing end
+    local active = ws:FindFirstChild("active")
+    if active then
+      roots[#roots + 1] = active
+      local b = active:FindFirstChild("bosses"); if b then roots[#roots + 1] = b end
+    end
+    for _, r in ipairs(roots) do
+      for _, c in ipairs(r:GetChildren()) do consider(c) end
+    end
+    if #out == 0 and tick0 % 8 == 0 then
+      local ps = ws:FindFirstChild("PlayerStats")
+      for _, d in ipairs(ws:GetDescendants()) do
+        if #out >= POOL then break end
+        if isMeg(d.Name) and not (ps and d:IsDescendantOf(ps)) then consider(d) end
+      end
+    end
+    state.targets = out
+    tick0 = tick0 + 1
+    task.wait(1)
+  end
+end)
+
+-- toggle
+local keyConn = UIS.InputBegan:Connect(function(input)
+  if input.KeyCode == TOGGLE_KEY then
+    state.enabled = not state.enabled
+  end
+end)
+
+-- renderer
+local renderConn = RunService.RenderStepped:Connect(function()
+  local vp = cam and cam.ViewportSize
+  local cx = vp and vp.X * 0.5 or 960
+  local list = state.targets
+  local char = lp.Character
+  local hrp = char and char:FindFirstChild("HumanoidRootPart")
+  local myPos = hrp and hrp.Position
+
+  local nearest
+  local n = 0
+  for i = 1, #list do
+    local t = list[i]
+    local pos = t.part.Position or t.lastPos
+    local dist = myPos and math.floor((pos - myPos).Magnitude) or 0
+    if not nearest or dist < nearest then nearest = dist end
+    if state.enabled then
+      local sz = t.part.Size or t.size
+      local half = math.min(math.max(sz.Y, 6), 60) * 0.5
+      local top, v1 = WorldToScreen(pos + Vector3.new(0, half, 0))
+      local bot, v2 = WorldToScreen(pos - Vector3.new(0, half, 0))
+      if v1 and v2 and n < POOL then
+        n = n + 1
+        local e = pool[n]
+        local h = math.max(bot.Y - top.Y, 12)
+        local w = h * 1.6
+        e.box.Position = Vector2.new(top.X - w * 0.5, top.Y)
+        e.box.Size = Vector2.new(w, h)
+        e.box.Visible = true
+        e.tag.Text = t.name .. " [" .. dist .. "m]"
+        e.tag.Position = Vector2.new(top.X, top.Y - 18)
+        e.tag.Visible = true
+        if vp then
+          e.line.From = Vector2.new(cx, vp.Y)
+          e.line.To = Vector2.new(top.X, bot.Y)
+          e.line.Visible = true
+        end
+      end
+    end
+  end
+  for i = n + 1, POOL do
+    pool[i].box.Visible = false; pool[i].tag.Visible = false; pool[i].line.Visible = false
+  end
+
+  local onoff = state.enabled and "ON" or "OFF"
+  if #list > 0 then
+    status.Text = "Megalodon ESP [Z]: " .. onoff .. "  |  FOUND x" .. #list .. "  -  " .. (nearest or 0) .. "m"
+    status.Color = state.enabled and Color3.fromRGB(80, 255, 120) or Color3.fromRGB(200, 200, 200)
+  else
+    status.Text = "Megalodon ESP [Z]: " .. onoff .. "  |  Not spawned / not loaded"
+    status.Color = state.enabled and Color3.fromRGB(255, 200, 60) or Color3.fromRGB(200, 200, 200)
+  end
+  status.Position = Vector2.new(cx, 8)
+end)
+
+_G.MegESP = { state = state, stop = function()
+  state.running = false
+  renderConn:Disconnect(); keyConn:Disconnect()
+  for i = 1, POOL do pool[i].box:Remove(); pool[i].tag:Remove(); pool[i].line:Remove() end
+  status:Remove()
+  _G.MegESP = nil
+end }
+print("MegESP 2.4 running. toggle key: Z")
